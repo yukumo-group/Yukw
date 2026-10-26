@@ -1,0 +1,6 @@
+[package]
+name = "script"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
