@@ -25,15 +25,8 @@ fn vendor_voices_link_against_a_stub_runtime() {
         let bindings = engine::parse_wasm_imports(&js).unwrap();
         let rewritten = aq_wasm::rewrite_imports(&wasm, &bindings).unwrap();
         let runtime = stub_runtime(&rewritten).unwrap();
-        link(
-            &runtime,
-            &[VoiceModule {
-                wasm: &rewritten,
-                version: 1,
-                preset: 0,
-            }],
-        )
-        .unwrap_or_else(|err| panic!("{name}: {err}"));
+        link(&runtime, &[VoiceModule::new(&rewritten, 1, 0)])
+            .unwrap_or_else(|err| panic!("{name}: {err}"));
     }
 }
 

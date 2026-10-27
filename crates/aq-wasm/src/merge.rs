@@ -94,6 +94,26 @@ pub struct VoiceModule<'a> {
     pub version: i32,
     /// Aq1 preset packed into `voice_info`, or `-1` for other engines.
     pub preset: i32,
+    /// Export called from `voice_init` after the start function. Voice builds use `F`.
+    pub init_export: &'a str,
+    /// `malloc` export. Voice builds use `H`; other emscripten builds pick a different letter.
+    pub malloc_export: &'a str,
+    /// `free` export. Voice builds use `I`.
+    pub free_export: &'a str,
+}
+
+impl<'a> VoiceModule<'a> {
+    /// A voice module. Malloc, free, and the extra ctor export match `vendor/aqtk*.js`.
+    pub fn new(wasm: &'a [u8], version: i32, preset: i32) -> Self {
+        Self {
+            wasm,
+            version,
+            preset,
+            init_export: "F",
+            malloc_export: "H",
+            free_export: "I",
+        }
+    }
 }
 
 /// Merge `runtime` with `voices`. The result imports nothing.
@@ -269,17 +289,21 @@ pub fn link_vendor(runtime: &[u8], vendor: &Path) -> Result<Vec<u8>, String> {
         let wasm = std::fs::read(&wasm_path).map_err(|err| err.to_string())?;
         let js = std::fs::read_to_string(&js_path).map_err(|err| err.to_string())?;
         let bindings = engine::parse_wasm_imports(&js)?;
+        if bindings.len() != engine::Semantic::ALL.len() {
+            return Err(format!(
+                "{}: expected {} imports, found {}",
+                voice.file,
+                engine::Semantic::ALL.len(),
+                bindings.len()
+            ));
+        }
         let rewritten = crate::rewrite_imports(&wasm, &bindings)?;
         let rewritten = myriad_4_link(&rewritten)?;
         owned.push((rewritten, voice.version, voice.preset));
     }
     let modules = owned
         .iter()
-        .map(|(bytes, version, preset)| VoiceModule {
-            wasm: bytes,
-            version: *version,
-            preset: *preset,
-        })
+        .map(|(bytes, version, preset)| VoiceModule::new(bytes, *version, *preset))
         .collect::<Vec<_>>();
     link(runtime, &modules)
 }
@@ -470,11 +494,12 @@ fn voice_runtime(
             continue;
         }
         let func = place.map_func(export.index)?;
-        match export.name.as_str() {
-            "F" if !init.contains(&func) => init.push(func),
-            "H" => malloc = Some(func),
-            "I" => free = Some(func),
-            _ => {}
+        if export.name == module.init_export && !init.contains(&func) {
+            init.push(func);
+        } else if export.name == module.malloc_export {
+            malloc = Some(func);
+        } else if export.name == module.free_export {
+            free = Some(func);
         }
     }
     let mut slots: Vec<Option<CallSlot>> = Vec::new();

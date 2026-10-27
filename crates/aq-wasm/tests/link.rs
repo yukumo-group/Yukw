@@ -39,16 +39,8 @@ fn same_import_reads_each_voice_memory() {
     let linked = link(
         &runtime,
         &[
-            VoiceModule {
-                wasm: &first,
-                version: 1,
-                preset: 0,
-            },
-            VoiceModule {
-                wasm: &second,
-                version: 2,
-                preset: -1,
-            },
+            VoiceModule::new(&first, 1, 0),
+            VoiceModule::new(&second, 2, -1),
         ],
     )
     .unwrap();
