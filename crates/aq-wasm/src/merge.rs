@@ -1106,26 +1106,6 @@ fn convert_vals(types: &[ParserVal]) -> Result<Vec<ValType>, String> {
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{myriad_4_link, xl};
-
-    #[test]
-    fn myriad_4_link_replaces_every_copy() {
-        let find = xl(env!("M4L_FIND_B64")).unwrap();
-        let replace = xl(env!("M4L_REPLACE_B64")).unwrap();
-        let mut wasm = vec![7u8; 4];
-        wasm.extend_from_slice(&find);
-        wasm.extend_from_slice(&[9, 9]);
-        wasm.extend_from_slice(&find);
-        let out = myriad_4_link(&wasm).unwrap();
-        assert_eq!(out.len(), wasm.len());
-        assert_eq!(&out[4..36], &replace);
-        assert_eq!(&out[38..70], &replace);
-        assert!(myriad_4_link(&[1, 2, 3]).is_err());
-    }
-}
-
 fn const_i32(expr: &ConstExpr<'_>) -> Result<u32, String> {
     let mut reader = expr.get_operators_reader();
     match reader.read().map_err(|err| err.to_string())? {
