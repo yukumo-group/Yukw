@@ -187,14 +187,9 @@ fn bind_args(
         } else if label == "float4" || label == "float8" {
             args.push(HostArg::F64(param.speed as f64));
         } else if label.starts_with("view") {
-            let Some(bytes) = param.phont_data.clone() else {
-                return None;
-            };
-            args.push(HostArg::Bytes(bytes));
-        } else if let Some(object) = object_arg(embind, voice, label, param, row) {
-            args.push(object);
+            args.push(HostArg::Bytes(param.phont_data.clone()?));
         } else {
-            return None;
+            args.push(object_arg(embind, voice, label, param, row)?);
         }
     }
     Some(args)

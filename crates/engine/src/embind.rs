@@ -63,6 +63,32 @@ struct PendingFn {
     func: u32,
 }
 
+/// Pointers for `__embind_register_function` in one voice's memory.
+pub struct RegisterFunction {
+    pub voice: u32,
+    pub name: u32,
+    pub arg_count: u32,
+    pub arg_types: u32,
+    pub signature: u32,
+    pub invoker: u32,
+    pub func: u32,
+    pub is_async: u32,
+    pub is_nonnull_return: u32,
+}
+
+/// Pointers for `__embind_register_value_object_field` in one voice's memory.
+pub struct RegisterValueObjectField {
+    pub voice: u32,
+    pub struct_type: u32,
+    pub field_name: u32,
+    pub getter_type: u32,
+    pub getter: u32,
+    pub getter_context: u32,
+    pub setter_type: u32,
+    pub setter: u32,
+    pub setter_context: u32,
+}
+
 struct PendingObject {
     name_ptr: u32,
     ctor: u32,
@@ -274,8 +300,6 @@ impl Inner {
         raw_type: u32,
         name_ptr: u32,
         size: u32,
-        _min: i32,
-        _max: i32,
         io: &mut dyn VoiceIo,
     ) {
         let _name = read_cstr(io, voice, name_ptr);
@@ -288,8 +312,6 @@ impl Inner {
         raw_type: u32,
         name_ptr: u32,
         size: u32,
-        _min: i64,
-        _max: i64,
         io: &mut dyn VoiceIo,
     ) {
         let _name = read_cstr(io, voice, name_ptr);
@@ -358,9 +380,7 @@ impl Inner {
         voice: u32,
         raw_type: u32,
         name_ptr: u32,
-        _ctor_sig: u32,
         ctor: u32,
-        _dtor_sig: u32,
         dtor: u32,
     ) {
         self.pending_objects.insert(
@@ -376,27 +396,28 @@ impl Inner {
 
     pub fn register_value_object_field(
         &mut self,
-        voice: u32,
-        struct_type: u32,
-        field_name_ptr: u32,
-        getter_return_type: u32,
-        _getter_sig: u32,
-        getter: u32,
-        getter_context: u32,
-        setter_argument_type: u32,
-        _setter_sig: u32,
-        setter: u32,
-        setter_context: u32,
+        args: RegisterValueObjectField,
         io: &mut dyn VoiceIo,
     ) {
-        let name = read_cstr(io, voice, field_name_ptr);
+        let RegisterValueObjectField {
+            voice,
+            struct_type,
+            field_name,
+            getter_type,
+            getter,
+            getter_context,
+            setter_type,
+            setter,
+            setter_context,
+        } = args;
+        let name = read_cstr(io, voice, field_name);
         if let Some(object) = self.pending_objects.get_mut(&(voice, struct_type)) {
             object.fields.push(Field {
                 name,
-                getter_type: getter_return_type,
+                getter_type,
                 getter,
                 getter_context,
-                setter_type: setter_argument_type,
+                setter_type,
                 setter,
                 setter_context,
             });
@@ -422,34 +443,31 @@ impl Inner {
         );
     }
 
-    pub fn register_function(
-        &mut self,
-        voice: u32,
-        name_ptr: u32,
-        arg_count: u32,
-        arg_types_addr: u32,
-        signature_ptr: u32,
-        invoker: u32,
-        func: u32,
-        _is_async: u32,
-        _is_nonnull_return: u32,
-        io: &mut dyn VoiceIo,
-    ) {
+    pub fn register_function(&mut self, args: RegisterFunction, io: &mut dyn VoiceIo) {
+        let RegisterFunction {
+            voice,
+            name: name_ptr,
+            arg_count,
+            arg_types: arg_types_addr,
+            signature: signature_ptr,
+            invoker,
+            func,
+            is_async: _,
+            is_nonnull_return: _,
+        } = args;
+        let pending = PendingFn {
+            name_ptr,
+            arg_types_addr,
+            arg_count,
+            signature_ptr,
+            invoker,
+            func,
+        };
         let type_ids = self.read_type_ids(io, voice, arg_count, arg_types_addr);
         if self.types_ready(voice, &type_ids) {
-            self.bind_function(voice, name_ptr, type_ids, signature_ptr, invoker, func, io);
+            self.bind_function(voice, type_ids, &pending, io);
         } else {
-            self.pending_fns.push((
-                voice,
-                PendingFn {
-                    name_ptr,
-                    arg_types_addr,
-                    arg_count,
-                    signature_ptr,
-                    invoker,
-                    func,
-                },
-            ));
+            self.pending_fns.push((voice, pending));
         }
     }
 
@@ -608,15 +626,7 @@ impl Inner {
             }
             let type_ids = self.read_type_ids(io, voice, pending.arg_count, pending.arg_types_addr);
             if self.types_ready(voice, &type_ids) {
-                self.bind_function(
-                    voice,
-                    pending.name_ptr,
-                    type_ids,
-                    pending.signature_ptr,
-                    pending.invoker,
-                    pending.func,
-                    io,
-                );
+                self.bind_function(voice, type_ids, &pending, io);
             } else {
                 still.push((id, pending));
             }
@@ -639,26 +649,23 @@ impl Inner {
     fn bind_function(
         &mut self,
         voice: u32,
-        name_ptr: u32,
         arg_types: Vec<u32>,
-        signature_ptr: u32,
-        invoker: u32,
-        func: u32,
+        pending: &PendingFn,
         io: &mut dyn VoiceIo,
     ) {
-        let mut name = read_cstr(io, voice, name_ptr);
+        let mut name = read_cstr(io, voice, pending.name_ptr);
         if let Some(paren) = name.find('(') {
             name.truncate(paren);
             name = name.trim().to_string();
         }
-        let signature = read_cstr(io, voice, signature_ptr);
+        let signature = read_cstr(io, voice, pending.signature_ptr);
         self.functions.push((
             voice,
             BoundFn {
                 name,
                 arg_types,
-                invoker,
-                func,
+                invoker: pending.invoker,
+                func: pending.func,
                 signature,
             },
         ));
@@ -779,13 +786,11 @@ impl Embind {
         raw: u32,
         name: u32,
         size: u32,
-        min: i32,
-        max: i32,
         io: &mut dyn VoiceIo,
     ) {
         self.inner
             .borrow_mut()
-            .register_integer(voice, raw, name, size, min, max, io);
+            .register_integer(voice, raw, name, size, io);
     }
 
     pub fn register_bigint(
@@ -794,13 +799,11 @@ impl Embind {
         raw: u32,
         name: u32,
         size: u32,
-        min: i64,
-        max: i64,
         io: &mut dyn VoiceIo,
     ) {
         self.inner
             .borrow_mut()
-            .register_bigint(voice, raw, name, size, min, max, io);
+            .register_bigint(voice, raw, name, size, io);
     }
 
     pub fn register_float(&self, voice: u32, raw: u32, name: u32, size: u32, io: &mut dyn VoiceIo) {
@@ -845,50 +848,20 @@ impl Embind {
             .register_memory_view(voice, raw, data_type, name, io);
     }
 
-    pub fn register_value_object(
-        &self,
-        voice: u32,
-        raw: u32,
-        name: u32,
-        ctor_sig: u32,
-        ctor: u32,
-        dtor_sig: u32,
-        dtor: u32,
-    ) {
+    pub fn register_value_object(&self, voice: u32, raw: u32, name: u32, ctor: u32, dtor: u32) {
         self.inner
             .borrow_mut()
-            .register_value_object(voice, raw, name, ctor_sig, ctor, dtor_sig, dtor);
+            .register_value_object(voice, raw, name, ctor, dtor);
     }
 
     pub fn register_value_object_field(
         &self,
-        voice: u32,
-        struct_type: u32,
-        field_name: u32,
-        getter_type: u32,
-        getter_sig: u32,
-        getter: u32,
-        getter_context: u32,
-        setter_type: u32,
-        setter_sig: u32,
-        setter: u32,
-        setter_context: u32,
+        args: RegisterValueObjectField,
         io: &mut dyn VoiceIo,
     ) {
-        self.inner.borrow_mut().register_value_object_field(
-            voice,
-            struct_type,
-            field_name,
-            getter_type,
-            getter_sig,
-            getter,
-            getter_context,
-            setter_type,
-            setter_sig,
-            setter,
-            setter_context,
-            io,
-        );
+        self.inner
+            .borrow_mut()
+            .register_value_object_field(args, io);
     }
 
     pub fn finalize_value_object(&self, voice: u32, struct_type: u32, io: &mut dyn VoiceIo) {
@@ -897,31 +870,8 @@ impl Embind {
             .finalize_value_object(voice, struct_type, io);
     }
 
-    pub fn register_function(
-        &self,
-        voice: u32,
-        name: u32,
-        arg_count: u32,
-        arg_types: u32,
-        signature: u32,
-        invoker: u32,
-        func: u32,
-        is_async: u32,
-        is_nonnull_return: u32,
-        io: &mut dyn VoiceIo,
-    ) {
-        self.inner.borrow_mut().register_function(
-            voice,
-            name,
-            arg_count,
-            arg_types,
-            signature,
-            invoker,
-            func,
-            is_async,
-            is_nonnull_return,
-            io,
-        );
+    pub fn register_function(&self, args: RegisterFunction, io: &mut dyn VoiceIo) {
+        self.inner.borrow_mut().register_function(args, io);
     }
 
     pub fn cxa_throw(&self, voice: u32, ptr: u32, ty: u32, destructor: u32) {
@@ -1013,7 +963,7 @@ impl Embind {
         args: &[HostArg],
         io: &mut dyn VoiceIo,
     ) -> Result<HostValue, String> {
-        if func.arg_types.len() < 1 {
+        if func.arg_types.is_empty() {
             return Err("function has no return type".to_string());
         }
         let params = &func.arg_types[1..];
@@ -1048,7 +998,7 @@ impl Embind {
         if self.threw() {
             return Err("voice raised".to_string());
         }
-        self.from_wire(voice, func.arg_types[0], returned, io)
+        self.wire_to_host(voice, func.arg_types[0], returned, io)
     }
 
     /// Run one invoker created by `__emval_create_invoker`. The return is the f64 wire value.
@@ -1058,7 +1008,6 @@ impl Embind {
         caller: u32,
         handle: u32,
         method_name: u32,
-        _destructors: u32,
         args: u32,
         io: &mut dyn VoiceIo,
     ) -> f64 {
@@ -1196,7 +1145,7 @@ impl Embind {
         Ok(WireVal::I32(base))
     }
 
-    fn from_wire(
+    fn wire_to_host(
         &self,
         voice: u32,
         raw_type: u32,
@@ -1260,7 +1209,7 @@ impl Embind {
                         field.getter,
                         &[WireVal::I32(field.getter_context), WireVal::I32(ptr)],
                     );
-                    let value = self.from_wire(voice, field.getter_type, raw, io)?;
+                    let value = self.wire_to_host(voice, field.getter_type, raw, io)?;
                     if !text.is_empty() {
                         text.push(',');
                     }
@@ -1350,9 +1299,9 @@ impl Embind {
         let count = read_u32(io, voice, addr) as usize;
         let data = read_u32(io, voice, addr + 4);
         let elem = match index {
-            2 | 3 => 2,
-            4 | 5 | 6 => 4,
-            7 | 8 | 9 => 8,
+            2..=3 => 2,
+            4..=6 => 4,
+            7..=9 => 8,
             _ => 1,
         };
         let nbytes = count.saturating_mul(elem).min(32 * 1024 * 1024);

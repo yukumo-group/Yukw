@@ -5,7 +5,7 @@
 use crate::param::AqVersion;
 
 struct ErrorRow {
-    /// 0 applies to every engine. Otherwise an [`AqVersion`] discriminant.
+    /// 0 applies to every engine. Otherwise, an [`AqVersion`] discriminant.
     version: i32,
     code: i32,
     name: &'static str,

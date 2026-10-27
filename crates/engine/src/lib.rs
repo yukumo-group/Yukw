@@ -8,7 +8,7 @@ mod preset;
 mod synth;
 mod voice;
 
-pub use embind::{Embind, HostArg, HostValue};
+pub use embind::{Embind, HostArg, HostValue, RegisterFunction, RegisterValueObjectField};
 pub use error::error_message;
 pub use imports::{IMPORT_MODULE, ImportBinding, Semantic, parse_wasm_imports};
 pub use param::{

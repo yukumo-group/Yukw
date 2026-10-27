@@ -1,4 +1,4 @@
-use engine::{Embind, HostArg, HostValue, VoiceIo, WireVal};
+use engine::{Embind, HostArg, HostValue, RegisterFunction, VoiceIo, WireVal};
 
 struct Fake {
     mem: Vec<u8>,
@@ -82,7 +82,20 @@ fn registration_records_synthe_and_call_wires_the_string() {
     let embind = Embind::new();
     embind.register_void(0, 1, 0, &mut io);
     embind.register_std_string(0, 2, 8, &mut io);
-    embind.register_function(0, 32, 2, 64, 48, 10, 11, 0, 0, &mut io);
+    embind.register_function(
+        RegisterFunction {
+            voice: 0,
+            name: 32,
+            arg_count: 2,
+            arg_types: 64,
+            signature: 48,
+            invoker: 10,
+            func: 11,
+            is_async: 0,
+            is_nonnull_return: 0,
+        },
+        &mut io,
+    );
 
     let func = embind.function(0, "synthe").unwrap().clone();
     assert_eq!(

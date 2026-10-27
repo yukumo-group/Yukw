@@ -243,7 +243,7 @@ fn write_u32(ptr: u32, value: u32) {
 
 /// Synthesize UTF-8 `text`. `param` points at [`ParamAbi`] in memory 0.
 /// `phont_len` is the size of `phont_data` because the C struct has no length.
-/// On success returns 0 and writes the wav pointer and size. Otherwise a negative code.
+/// On success returns 0 and writes the wav pointer and size. Otherwise, a negative code.
 #[unsafe(no_mangle)]
 pub extern "C" fn aq_synthesize(
     text: u32,
@@ -491,7 +491,7 @@ pub extern "C" fn host___emval_invoke(
     caller: i32,
     handle: i32,
     method: i32,
-    destructors: i32,
+    _destructors: i32,
     args: i32,
 ) -> f64 {
     with_embind(|embind, io| {
@@ -500,7 +500,6 @@ pub extern "C" fn host___emval_invoke(
             caller as u32,
             handle as u32,
             method as u32,
-            destructors as u32,
             args as u32,
             io,
         )
@@ -532,19 +531,11 @@ pub extern "C" fn host___embind_register_integer(
     raw: i32,
     name: i32,
     size: i32,
-    min: i32,
-    max: i32,
+    _min: i32,
+    _max: i32,
 ) {
     with_embind(|embind, io| {
-        embind.register_integer(
-            voice as u32,
-            raw as u32,
-            name as u32,
-            size as u32,
-            min,
-            max,
-            io,
-        );
+        embind.register_integer(voice as u32, raw as u32, name as u32, size as u32, io);
     });
 }
 
@@ -554,19 +545,11 @@ pub extern "C" fn host___embind_register_bigint(
     raw: i32,
     name: i32,
     size: i32,
-    min: i64,
-    max: i64,
+    _min: i64,
+    _max: i64,
 ) {
     with_embind(|embind, io| {
-        embind.register_bigint(
-            voice as u32,
-            raw as u32,
-            name as u32,
-            size as u32,
-            min,
-            max,
-            io,
-        );
+        embind.register_bigint(voice as u32, raw as u32, name as u32, size as u32, io);
     });
 }
 
@@ -618,9 +601,9 @@ pub extern "C" fn host___embind_register_value_object(
     voice: i32,
     raw: i32,
     name: i32,
-    ctor_sig: i32,
+    _ctor_sig: i32,
     ctor: i32,
-    dtor_sig: i32,
+    _dtor_sig: i32,
     dtor: i32,
 ) {
     with_embind(|embind, _| {
@@ -628,9 +611,7 @@ pub extern "C" fn host___embind_register_value_object(
             voice as u32,
             raw as u32,
             name as u32,
-            ctor_sig as u32,
             ctor as u32,
-            dtor_sig as u32,
             dtor as u32,
         );
     });
@@ -642,27 +623,27 @@ pub extern "C" fn host___embind_register_value_object_field(
     struct_type: i32,
     field_name: i32,
     getter_type: i32,
-    getter_sig: i32,
+    _getter_sig: i32,
     getter: i32,
     getter_context: i32,
     setter_type: i32,
-    setter_sig: i32,
+    _setter_sig: i32,
     setter: i32,
     setter_context: i32,
 ) {
     with_embind(|embind, io| {
         embind.register_value_object_field(
-            voice as u32,
-            struct_type as u32,
-            field_name as u32,
-            getter_type as u32,
-            getter_sig as u32,
-            getter as u32,
-            getter_context as u32,
-            setter_type as u32,
-            setter_sig as u32,
-            setter as u32,
-            setter_context as u32,
+            engine::RegisterValueObjectField {
+                voice: voice as u32,
+                struct_type: struct_type as u32,
+                field_name: field_name as u32,
+                getter_type: getter_type as u32,
+                getter: getter as u32,
+                getter_context: getter_context as u32,
+                setter_type: setter_type as u32,
+                setter: setter as u32,
+                setter_context: setter_context as u32,
+            },
             io,
         );
     });
@@ -689,15 +670,17 @@ pub extern "C" fn host___embind_register_function(
 ) {
     with_embind(|embind, io| {
         embind.register_function(
-            voice as u32,
-            name as u32,
-            arg_count as u32,
-            arg_types as u32,
-            signature as u32,
-            invoker as u32,
-            func as u32,
-            is_async as u32,
-            is_nonnull_return as u32,
+            engine::RegisterFunction {
+                voice: voice as u32,
+                name: name as u32,
+                arg_count: arg_count as u32,
+                arg_types: arg_types as u32,
+                signature: signature as u32,
+                invoker: invoker as u32,
+                func: func as u32,
+                is_async: is_async as u32,
+                is_nonnull_return: is_nonnull_return as u32,
+            },
             io,
         );
     });

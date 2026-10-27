@@ -27,10 +27,8 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 name = "aq-wasm"
 version = "0.1.0"
 dependencies = [
- "base64",
- "character",
+ "base64 0.23.1",
  "engine",
- "script",
  "wasm-encoder 0.262.0",
  "wasmparser 0.262.0",
  "wasmtime",
@@ -59,6 +57,12 @@ name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bitflags"
@@ -406,7 +410,7 @@ dependencies = [
 name = "engine"
 version = "0.1.0"
 dependencies = [
- "base64",
+ "base64 0.23.1",
 ]
 
 [[package]]
@@ -1419,7 +1423,7 @@ version = "50.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "067440fa60ddd5145840e0335ffe0ab4d908a021932b6844c3ad61570abddfef"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "directories-next",
  "log",
  "postcard",

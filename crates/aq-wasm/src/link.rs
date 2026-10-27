@@ -40,7 +40,7 @@ impl Reencode for Renamer<'_> {
                     for name in names {
                         let name = name?;
                         let (module, name) = renamed(module, name, self.map)?;
-                        imports.import(module, name, ty.clone());
+                        imports.import(module, name, ty);
                     }
                 }
             }

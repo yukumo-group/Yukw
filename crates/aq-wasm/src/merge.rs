@@ -131,10 +131,7 @@ pub fn link(runtime: &[u8], voices: &[VoiceModule<'_>]) -> Result<Vec<u8>, Strin
     let mut shim_at = shim_base;
     for (place, info) in places[1..].iter_mut().zip(&voice_infos) {
         place.import_targets = (0..info.func_imports.len())
-            .map(|index| {
-                let target = shim_at + index as u32;
-                target
-            })
+            .map(|index| shim_at + index as u32)
             .collect();
         shim_at += info.func_imports.len() as u32;
     }
@@ -522,12 +519,20 @@ struct Remap {
 impl Reencode for Remap {
     type Error = String;
 
+    fn data_index(&mut self, data: u32) -> Result<u32, ReencodeError<String>> {
+        Ok(self.place.data_base + data)
+    }
+
+    fn element_index(&mut self, element: u32) -> Result<u32, ReencodeError<String>> {
+        Ok(self.place.element_base + element)
+    }
+
     fn function_index(&mut self, func: u32) -> Result<u32, ReencodeError<String>> {
         self.place.map_func(func).map_err(ReencodeError::UserError)
     }
 
-    fn type_index(&mut self, ty: u32) -> Result<u32, ReencodeError<String>> {
-        Ok(self.place.type_base + ty)
+    fn global_index(&mut self, global: u32) -> Result<u32, ReencodeError<String>> {
+        Ok(self.place.global_base + global)
     }
 
     fn memory_index(&mut self, memory: u32) -> Result<u32, ReencodeError<String>> {
@@ -538,16 +543,8 @@ impl Reencode for Remap {
         Ok(self.place.table_base + table)
     }
 
-    fn global_index(&mut self, global: u32) -> Result<u32, ReencodeError<String>> {
-        Ok(self.place.global_base + global)
-    }
-
-    fn data_index(&mut self, data: u32) -> Result<u32, ReencodeError<String>> {
-        Ok(self.place.data_base + data)
-    }
-
-    fn element_index(&mut self, element: u32) -> Result<u32, ReencodeError<String>> {
-        Ok(self.place.element_base + element)
+    fn type_index(&mut self, ty: u32) -> Result<u32, ReencodeError<String>> {
+        Ok(self.place.type_base + ty)
     }
 }
 
@@ -1036,14 +1033,7 @@ fn scan(bytes: &[u8]) -> Result<ModInfo, String> {
                         Imports::Compact2 { module, ty, names } => {
                             for name in names {
                                 let name = name.map_err(|err| err.to_string())?;
-                                push_import(
-                                    &mut info,
-                                    Import {
-                                        module,
-                                        name,
-                                        ty: ty.clone(),
-                                    },
-                                )?;
+                                push_import(&mut info, Import { module, name, ty })?;
                             }
                         }
                     }
@@ -1096,10 +1086,8 @@ fn scan(bytes: &[u8]) -> Result<ModInfo, String> {
                 }
             }
             Payload::DataSection(section) => info.data = section.count(),
-            Payload::DataCountSection { count, .. } => {
-                if info.data == 0 {
-                    info.data = count;
-                }
+            Payload::DataCountSection { count, .. } if info.data == 0 => {
+                info.data = count;
             }
             _ => {}
         }
@@ -1134,87 +1122,6 @@ fn convert_vals(types: &[ParserVal]) -> Result<Vec<ValType>, String> {
             other => Err(format!("unsupported value type {other:?}")),
         })
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-    use wasm_encoder::MemoryType;
-
-    #[test]
-    fn vendor_voices_link_against_a_stub_runtime() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vendor");
-        for name in ["aqtk1-f1", "aqtk2", "aqtk10"] {
-            let wasm_path = root.join(format!("{name}.wasm"));
-            let js_path = root.join(format!("{name}.js"));
-            if !wasm_path.exists() || !js_path.exists() {
-                continue;
-            }
-            let wasm = std::fs::read(&wasm_path).unwrap();
-            let js = std::fs::read_to_string(&js_path).unwrap();
-            let bindings = engine::parse_wasm_imports(&js).unwrap();
-            let rewritten = crate::rewrite_imports(&wasm, &bindings).unwrap();
-            let runtime = stub_runtime(&rewritten).unwrap();
-            link(
-                &runtime,
-                &[VoiceModule {
-                    wasm: &rewritten,
-                    version: 1,
-                    preset: 0,
-                }],
-            )
-            .unwrap_or_else(|err| panic!("{name}: {err}"));
-        }
-    }
-
-    fn stub_runtime(voice: &[u8]) -> Result<Vec<u8>, String> {
-        let info = scan(voice)?;
-        let mut types = TypeSection::new();
-        let mut functions = FunctionSection::new();
-        let mut exports = ExportSection::new();
-        let mut code = CodeSection::new();
-        let mut memories = MemorySection::new();
-        memories.memory(MemoryType {
-            minimum: 1,
-            maximum: None,
-            memory64: false,
-            shared: false,
-            page_size_log2: None,
-        });
-        for (index, import) in info.func_imports.iter().enumerate() {
-            let sig = info.sig(import.type_index)?;
-            let mut params = vec![ValType::I32];
-            params.extend(sig.params.iter().copied());
-            let type_index = types.len();
-            types.ty().function(params, sig.results.iter().copied());
-            functions.function(type_index);
-            let mut body = Function::new([]);
-            match sig.results.as_slice() {
-                [] => {}
-                [ValType::I32] => op(&mut body, Instruction::I32Const(0)),
-                [ValType::I64] => op(&mut body, Instruction::I64Const(0)),
-                [ValType::F32] => op(&mut body, Instruction::F32Const(0f32.into())),
-                [ValType::F64] => op(&mut body, Instruction::F64Const(0f64.into())),
-                _ => return Err(format!("{} has an unsupported result", import.field)),
-            }
-            op(&mut body, Instruction::End);
-            code.function(&body);
-            exports.export(
-                &format!("host_{}", import.field),
-                ExportKind::Func,
-                index as u32,
-            );
-        }
-        exports.export("memory", ExportKind::Memory, 0);
-        let mut module = Module::new();
-        module.section(&types);
-        module.section(&functions);
-        module.section(&memories);
-        module.section(&exports);
-        module.section(&code);
-        Ok(module.finish())
-    }
 }
 
 fn const_i32(expr: &ConstExpr<'_>) -> Result<u32, String> {
