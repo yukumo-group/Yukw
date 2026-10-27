@@ -685,6 +685,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kanji2koe"
+version = "0.1.0"
+dependencies = [
+ "aq-wasm",
+ "base64 0.23.1",
+ "embind",
+ "wasmtime",
+]
+
+[[package]]
 name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

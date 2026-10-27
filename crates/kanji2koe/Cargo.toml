@@ -1,0 +1,17 @@
+[package]
+name = "kanji2koe"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+base64 = "0.23.1"
+embind = { path = "../embind" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+aq-wasm = { path = "../aq-wasm" }
+
+[dev-dependencies]
+wasmtime = "50.0.0"
