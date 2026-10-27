@@ -2,6 +2,7 @@
 
 mod embind;
 mod error;
+pub mod host;
 mod imports;
 mod param;
 mod preset;

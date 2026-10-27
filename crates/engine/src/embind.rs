@@ -465,18 +465,6 @@ impl Inner {
         }
     }
 
-    pub fn resize_heap(&mut self, voice: u32, requested: u32, io: &mut dyn VoiceIo) -> i32 {
-        let page = 65_536u32;
-        let have = io.memory_pages(voice);
-        let have_bytes = have.saturating_mul(page);
-        if requested <= have_bytes {
-            return 1;
-        }
-        let need = requested.div_ceil(page);
-        let grow_by = need.saturating_sub(have);
-        if io.grow(voice, grow_by) < 0 { 0 } else { 1 }
-    }
-
     pub fn cxa_throw(&mut self, _voice: u32, _ptr: u32, _type: u32, _destructor: u32) {
         self.threw = true;
     }
@@ -571,39 +559,12 @@ impl Inner {
         id
     }
 
-    pub fn random(&mut self) -> f32 {
-        0.0
-    }
-
     pub fn set_clock(&mut self, ms: f64) {
         self.clock_ms = ms;
     }
 
     pub fn date_now(&mut self) -> f64 {
         self.clock_ms
-    }
-
-    pub fn random_get(&mut self, voice: u32, buf: u32, len: u32, io: &mut dyn VoiceIo) -> i32 {
-        if len > 0 && buf != 0 {
-            io.write(voice, buf, &vec![0; len as usize]);
-        }
-        0
-    }
-
-    pub fn gmtime(&mut self, voice: u32, _time: i64, tm_ptr: u32, io: &mut dyn VoiceIo) -> i32 {
-        if tm_ptr != 0 {
-            io.write(voice, tm_ptr, &[0; 36]);
-        }
-        0
-    }
-
-    pub fn tzset(&mut self, voice: u32, a: u32, b: u32, c: u32, d: u32, io: &mut dyn VoiceIo) {
-        // The glue writes timezone offsets through these pointers. Zero means UTC.
-        for ptr in [a, b, c, d] {
-            if ptr != 0 {
-                write_u32(io, voice, ptr, 0);
-            }
-        }
     }
 
     fn insert_type(&mut self, voice: u32, raw_type: u32, kind: TypeKind) {
@@ -908,32 +869,12 @@ impl Embind {
         self.inner.borrow_mut().abort();
     }
 
-    pub fn resize_heap(&self, voice: u32, requested: u32, io: &mut dyn VoiceIo) -> i32 {
-        self.inner.borrow_mut().resize_heap(voice, requested, io)
-    }
-
-    pub fn random(&self) -> f32 {
-        self.inner.borrow_mut().random()
-    }
-
     pub fn set_clock(&self, ms: f64) {
         self.inner.borrow_mut().set_clock(ms);
     }
 
     pub fn date_now(&self) -> f64 {
         self.inner.borrow_mut().date_now()
-    }
-
-    pub fn random_get(&self, voice: u32, buf: u32, len: u32, io: &mut dyn VoiceIo) -> i32 {
-        self.inner.borrow_mut().random_get(voice, buf, len, io)
-    }
-
-    pub fn gmtime(&self, voice: u32, time: i64, tm_ptr: u32, io: &mut dyn VoiceIo) -> i32 {
-        self.inner.borrow_mut().gmtime(voice, time, tm_ptr, io)
-    }
-
-    pub fn tzset(&self, voice: u32, a: u32, b: u32, c: u32, d: u32, io: &mut dyn VoiceIo) {
-        self.inner.borrow_mut().tzset(voice, a, b, c, d, io);
     }
 
     pub fn emval_decref(&self, handle: u32) {
