@@ -1,14 +1,8 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! AquesTalk package. Native builds can rewrite and link voice modules.
+//! The wasm32 build exports the runtime entry points.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[cfg(not(target_arch = "wasm32"))]
+mod link;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+#[cfg(not(target_arch = "wasm32"))]
+pub use link::{import_names, rewrite_imports};
