@@ -5,10 +5,10 @@ use std::cell::RefCell;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
-use crate::embind::{BoundFn, Embind, HostArg, HostValue};
+use embind::{BoundFn, Embind, HostArg, HostValue, VoiceIo};
+
 use crate::param::{AqSynthParam, AqVersion};
 use crate::preset::{Aq10Voice, aq10_voice};
-use crate::voice::VoiceIo;
 
 pub const ERR_ARG: i32 = -1;
 pub const ERR_VERSION: i32 = -2;

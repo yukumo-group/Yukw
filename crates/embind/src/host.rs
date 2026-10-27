@@ -1,4 +1,4 @@
-//! Emscripten libc imports the voice modules call. Binding stays in `embind`.
+//! Emscripten libc imports a vendor module calls. Type registration stays in `embind`.
 
 use crate::voice::VoiceIo;
 

@@ -28,6 +28,7 @@ name = "aq-wasm"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "embind",
  "engine",
  "wasm-encoder 0.262.0",
  "wasmparser 0.262.0",
@@ -393,6 +394,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
+name = "embind"
+version = "0.1.0"
+
+[[package]]
 name = "encoding_rs"
 version = "0.8.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -411,6 +416,7 @@ name = "engine"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "embind",
 ]
 
 [[package]]

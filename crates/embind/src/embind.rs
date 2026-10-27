@@ -1,6 +1,6 @@
-//! Embind host shared by every voice module.
-//! Registrations follow the emscripten glue in `vendor/aqtk*.js`.
-//! Pointers passed to these functions address that voice's memory.
+//! Embind host shared by the voice modules and the reading converters.
+//! Registrations follow the emscripten glue under `vendor/`.
+//! Pointers passed to these functions address that module's memory.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -1139,24 +1139,24 @@ impl Embind {
                 };
                 Ok(HostValue::F64(number))
             }
-            TypeKind::String | TypeKind::WString { .. } => {
+            TypeKind::String => {
                 let ptr = value.as_i32();
                 if ptr == 0 {
                     return Ok(HostValue::Text(String::new()));
                 }
                 let len = read_u32(io, voice, ptr) as usize;
-                let mut bytes = vec![0; len];
-                if len > 0 {
-                    io.read(voice, ptr + 4, &mut bytes);
+                Ok(HostValue::Bytes(read_payload(io, voice, ptr, len)))
+            }
+            TypeKind::WString { char_size } => {
+                let ptr = value.as_i32();
+                if ptr == 0 {
+                    return Ok(HostValue::Text(String::new()));
                 }
-                io.free(voice, ptr);
-                if matches!(kind, TypeKind::String) {
-                    Ok(HostValue::Bytes(bytes))
-                } else {
-                    Ok(HostValue::Text(
-                        String::from_utf8_lossy(&bytes).into_owned(),
-                    ))
-                }
+                // The length word counts code units, matching the emscripten glue.
+                let units = read_u32(io, voice, ptr) as usize;
+                let nbytes = units.saturating_mul(char_size.max(1) as usize);
+                let bytes = read_payload(io, voice, ptr, nbytes);
+                Ok(HostValue::Text(decode_wstring(&bytes, char_size)))
             }
             TypeKind::MemoryView { index } => {
                 let handle = value.as_i32();
@@ -1249,18 +1249,24 @@ impl Embind {
             TypeKind::MemoryView { index } => {
                 EmValue::Bytes(Arc::new(self.read_view(voice, addr, index, io)))
             }
-            TypeKind::String | TypeKind::WString { .. } => {
+            TypeKind::String => {
                 let ptr = read_u32(io, voice, addr);
                 if ptr == 0 {
                     return EmValue::Str(String::new());
                 }
                 let len = read_u32(io, voice, ptr) as usize;
-                let mut bytes = vec![0; len];
-                if len > 0 {
-                    io.read(voice, ptr + 4, &mut bytes);
-                }
-                io.free(voice, ptr);
+                let bytes = read_payload(io, voice, ptr, len);
                 EmValue::Str(String::from_utf8_lossy(&bytes).into_owned())
+            }
+            TypeKind::WString { char_size } => {
+                let ptr = read_u32(io, voice, addr);
+                if ptr == 0 {
+                    return EmValue::Str(String::new());
+                }
+                let units = read_u32(io, voice, ptr) as usize;
+                let nbytes = units.saturating_mul(char_size.max(1) as usize);
+                let bytes = read_payload(io, voice, ptr, nbytes);
+                EmValue::Str(decode_wstring(&bytes, char_size))
             }
             TypeKind::Emval => {
                 let handle = read_u32(io, voice, addr);
@@ -1383,6 +1389,32 @@ impl Embind {
                 .unwrap_or(EmValue::Undef),
             _ => EmValue::Undef,
         }
+    }
+}
+
+fn read_payload(io: &mut dyn VoiceIo, voice: u32, ptr: u32, len: usize) -> Vec<u8> {
+    let mut bytes = vec![0; len];
+    if len > 0 {
+        io.read(voice, ptr + 4, &mut bytes);
+    }
+    io.free(voice, ptr);
+    bytes
+}
+
+/// `char_size` 2 is UTF-16, anything else is UTF-32. Both are little-endian.
+fn decode_wstring(bytes: &[u8], char_size: u32) -> String {
+    if char_size == 2 {
+        let units = bytes
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        String::from_utf16_lossy(&units)
+    } else {
+        bytes
+            .chunks_exact(4)
+            .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+            .filter_map(char::from_u32)
+            .collect()
     }
 }
 

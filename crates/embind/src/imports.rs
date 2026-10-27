@@ -1,5 +1,6 @@
-//! Canonical embind import names. Voice modules use different minified field
-//! names for this same set; the linker rewrites them to `env.<js_name>`.
+//! Canonical embind import names. Vendor modules use different minified field
+//! names for this set; the linker rewrites them to `env.<js_name>`.
+//! A module may import a subset. Voice glue imports every name.
 
 /// One host function the voice modules import.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -185,12 +186,8 @@ pub fn parse_wasm_imports(js: &str) -> Result<Vec<ImportBinding>, String> {
     if !closed {
         return Err("wasmImports object is not closed".to_string());
     }
-    if bindings.len() != Semantic::ALL.len() {
-        return Err(format!(
-            "expected {} imports, found {}",
-            Semantic::ALL.len(),
-            bindings.len()
-        ));
+    if bindings.is_empty() {
+        return Err("wasmImports object is empty".to_string());
     }
     Ok(bindings)
 }

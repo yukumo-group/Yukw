@@ -18,6 +18,14 @@ fn fixture_object_keeps_field_order() {
 }
 
 #[test]
+fn a_subset_of_the_glue_object_parses() {
+    let js = "var wasmImports = { a: __emval_decref, b: __emval_new_object };";
+    let bindings = parse_wasm_imports(js).unwrap();
+    assert_eq!(bindings.len(), 2);
+    assert_eq!(bindings[1].semantic, Semantic::EmvalNewObject);
+}
+
+#[test]
 fn vendor_glue_uses_the_same_semantic_set() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vendor");
     if !root.join("aqtk1-f1.js").is_file() {
