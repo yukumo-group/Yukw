@@ -1,5 +1,5 @@
-use engine::host::{gmtime, resize_heap};
-use engine::{VoiceIo, WireVal};
+use synth::host::{gmtime, resize_heap};
+use synth::{VoiceIo, WireVal};
 
 struct Mem {
     bytes: Vec<u8>,

@@ -1,4 +1,4 @@
-use engine::{
+use synth::{
     AQ1_PRESET_COUNT, AQ1_VOICES, AQ2_PHONTS, AQ2_PRESET_COUNT, AQ10_PRESET_COUNT, AQ10_VOICES,
     Aq1Preset, Aq2Preset, Aq10Preset, Aq10Voice, AqSynthParam, AqVersion, aq1_voice_name,
     aq2_phont_name, aq10_voice,

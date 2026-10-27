@@ -11,7 +11,7 @@ use std::path::Path;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use engine::IMPORT_MODULE;
+use synth::IMPORT_MODULE;
 use wasm_encoder::reencode::{Error as ReencodeError, Reencode};
 use wasm_encoder::{
     BlockType, CodeSection, DataCountSection, DataSection, ElementSection, ExportKind,
@@ -288,12 +288,12 @@ pub fn link_vendor(runtime: &[u8], vendor: &Path) -> Result<Vec<u8>, String> {
         }
         let wasm = std::fs::read(&wasm_path).map_err(|err| err.to_string())?;
         let js = std::fs::read_to_string(&js_path).map_err(|err| err.to_string())?;
-        let bindings = engine::parse_wasm_imports(&js)?;
-        if bindings.len() != engine::Semantic::ALL.len() {
+        let bindings = synth::parse_wasm_imports(&js)?;
+        if bindings.len() != synth::Semantic::ALL.len() {
             return Err(format!(
                 "{}: expected {} imports, found {}",
                 voice.file,
-                engine::Semantic::ALL.len(),
+                synth::Semantic::ALL.len(),
                 bindings.len()
             ));
         }

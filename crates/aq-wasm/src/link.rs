@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use engine::{IMPORT_MODULE, ImportBinding, Semantic};
+use synth::{IMPORT_MODULE, ImportBinding, Semantic};
 use wasm_encoder::reencode::{Error as ReencodeError, Reencode};
 use wasm_encoder::{ImportSection, Module};
 use wasmparser::{ImportSectionReader, Imports, Parser};

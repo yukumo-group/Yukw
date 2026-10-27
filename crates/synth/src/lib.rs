@@ -1,4 +1,4 @@
-//! Compatibility layer for the AquesTalk engines, matching `aqtk-shim`.
+//! AquesTalk speech synthesis, matching `aqtk-shim`.
 
 mod error;
 mod param;

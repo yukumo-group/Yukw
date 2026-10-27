@@ -1,4 +1,4 @@
-use engine::{Semantic, parse_wasm_imports};
+use synth::{Semantic, parse_wasm_imports};
 
 #[test]
 fn fixture_object_keeps_field_order() {

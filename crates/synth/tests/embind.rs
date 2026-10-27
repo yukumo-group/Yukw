@@ -1,4 +1,4 @@
-use engine::{Embind, HostArg, HostValue, RegisterFunction, VoiceIo, WireVal};
+use synth::{Embind, HostArg, HostValue, RegisterFunction, VoiceIo, WireVal};
 
 struct Fake {
     mem: Vec<u8>,

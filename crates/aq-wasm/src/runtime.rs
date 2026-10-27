@@ -5,7 +5,7 @@ use std::cell::Cell;
 use std::sync::OnceLock;
 
 use embind::VoiceIo;
-use engine::{
+use synth::{
     AqSynthParam, AqVersion, ERR_OPEN, ERR_VERSION, LinkedVoice, Session, error_message, find_voice,
 };
 

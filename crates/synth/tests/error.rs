@@ -1,4 +1,4 @@
-use engine::{AqVersion, error_message};
+use synth::{AqVersion, error_message};
 
 #[test]
 fn shared_and_engine_codes_use_the_shim_names() {

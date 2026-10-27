@@ -1,5 +1,5 @@
 use aq_wasm::{import_names, rewrite_imports};
-use engine::{ImportBinding, Semantic};
+use synth::{ImportBinding, Semantic};
 use wasm_encoder::{
     CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection, ImportSection,
     Instruction, Module, TypeSection, ValType,

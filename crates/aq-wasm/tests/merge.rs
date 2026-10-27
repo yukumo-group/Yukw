@@ -22,7 +22,7 @@ fn vendor_voices_link_against_a_stub_runtime() {
         }
         let wasm = std::fs::read(&wasm_path).unwrap();
         let js = std::fs::read_to_string(&js_path).unwrap();
-        let bindings = engine::parse_wasm_imports(&js).unwrap();
+        let bindings = synth::parse_wasm_imports(&js).unwrap();
         let rewritten = aq_wasm::rewrite_imports(&wasm, &bindings).unwrap();
         let runtime = stub_runtime(&rewritten).unwrap();
         link(&runtime, &[VoiceModule::new(&rewritten, 1, 0)])
