@@ -1,7 +1,7 @@
 //! Dispatch `AqSynthParam` onto the voice module that was linked for it.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 
 use crate::embind::{BoundFn, Embind, HostArg, HostValue};
 use crate::param::{AqSynthParam, AqVersion};
@@ -20,30 +20,16 @@ pub struct LinkedVoice {
     pub aq1_preset: Option<i32>,
 }
 
-#[derive(Clone, Debug, Default)]
-struct KeyPair {
-    dev: Option<String>,
-    usr: Option<String>,
-}
-
-/// Keys from `Engine::set_keys` plus the embind registrations.
+/// Embind registrations for the linked voices.
 pub struct Session {
     pub embind: Embind,
-    keys: RefCell<HashMap<i32, KeyPair>>,
 }
 
 impl Session {
     pub fn new() -> Self {
         Self {
             embind: Embind::new(),
-            keys: RefCell::new(HashMap::new()),
         }
-    }
-
-    pub fn set_keys(&self, version: AqVersion, dev: Option<String>, usr: Option<String>) {
-        self.keys
-            .borrow_mut()
-            .insert(version as i32, KeyPair { dev, usr });
     }
 
     /// Run a voice's initializer once. The initializer calls back into embind.
@@ -72,15 +58,23 @@ impl Session {
             self.embind.clear_threw();
             return Err(ERR_OPEN);
         }
-        self.apply_license(voice, param, io);
+        let balance = self.balance_token(voice, io);
         let func = self.embind.function(voice, "synthe").ok_or(ERR_OPEN)?;
         let voice_row = if param.version == AqVersion::V10 {
             aq10_voice(param)
         } else {
             None
         };
-        let args = bind_args(&self.embind, voice, &func, text, param, voice_row.as_ref())
-            .ok_or(ERR_OPEN)?;
+        let args = bind_args(
+            &self.embind,
+            voice,
+            &func,
+            text,
+            param,
+            voice_row.as_ref(),
+            &balance,
+        )
+        .ok_or(ERR_OPEN)?;
         let value = self
             .embind
             .invoke(voice, &func, &args, io)
@@ -88,27 +82,35 @@ impl Session {
         value_to_wav(value)
     }
 
-    fn apply_license(&self, voice: u32, param: &AqSynthParam, io: &mut dyn VoiceIo) {
-        let stored = self
-            .keys
-            .borrow()
-            .get(&(param.version as i32))
-            .cloned()
-            .unwrap_or_default();
-        let dev = pick(&param.dev_key, stored.dev.as_deref());
-        let usr = pick(&param.user_key, stored.usr.as_deref());
+    fn apply_license(&self, voice: u32, io: &mut dyn VoiceIo) {
         let Some(func) = self.embind.function(voice, "verifyLicense") else {
             return;
         };
-        for key in [dev, usr].into_iter().flatten() {
-            if key.is_empty() {
-                continue;
-            }
-            let args = bind_key(&self.embind, voice, &func, key);
-            if let Some(args) = args {
-                let _ = self.embind.invoke(voice, &func, &args, io);
+        let jwt = license_jwt();
+        let Some(args) = bind_key(&self.embind, voice, &func, &jwt) else {
+            return;
+        };
+        let _ = self.embind.invoke(voice, &func, &args, io);
+        self.embind.clear_threw();
+    }
+
+    /// `verifyLicense` takes the JWT. `synthe` takes the balance token that call issues.
+    fn balance_token(&self, voice: u32, io: &mut dyn VoiceIo) -> String {
+        self.apply_license(voice, io);
+        let Some(func) = self.embind.function(voice, "issueBalanceToken") else {
+            return String::new();
+        };
+        let value = match self.embind.invoke(voice, &func, &[], io) {
+            Ok(value) => value,
+            Err(_) => {
                 self.embind.clear_threw();
+                return String::new();
             }
+        };
+        match value {
+            HostValue::Text(text) => text,
+            HostValue::Bytes(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            _ => String::new(),
         }
     }
 }
@@ -119,11 +121,11 @@ impl Default for Session {
     }
 }
 
-fn pick<'a>(param_key: &'a Option<String>, stored: Option<&'a str>) -> Option<&'a str> {
-    match param_key {
-        Some(key) if !key.is_empty() => Some(key.as_str()),
-        _ => stored.filter(|key| !key.is_empty()),
-    }
+fn license_jwt() -> String {
+    let bytes = STANDARD
+        .decode(env!("LICENSE_JWT_B64"))
+        .expect("LICENSE_JWT_B64 is valid base64");
+    String::from_utf8(bytes).expect("LICENSE_JWT_B64 decodes to UTF-8")
 }
 
 pub fn find_voice(voices: &[LinkedVoice], param: &AqSynthParam) -> Option<u32> {
@@ -145,6 +147,7 @@ fn bind_args(
     text: &str,
     param: &AqSynthParam,
     row: Option<&Aq10Voice>,
+    balance: &str,
 ) -> Option<Vec<HostArg>> {
     let mut labels = embind.type_names(voice, func);
     if labels.is_empty() {
@@ -171,13 +174,7 @@ fn bind_args(
                 args.push(HostArg::Text(phont.to_string()));
                 used_phont = true;
             } else if !used_key {
-                let key = param
-                    .user_key
-                    .as_deref()
-                    .filter(|key| !key.is_empty())
-                    .or(param.dev_key.as_deref().filter(|key| !key.is_empty()))
-                    .unwrap_or("");
-                args.push(HostArg::Text(key.to_string()));
+                args.push(HostArg::Text(balance.to_string()));
                 used_key = true;
             } else {
                 args.push(HostArg::Text(String::new()));

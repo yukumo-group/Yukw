@@ -1,4 +1,4 @@
-//! Link the real voice modules and synthesize one phrase.
+//! Link the real voice modules, use the built-in test license, and synthesize.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -60,21 +60,17 @@ fn yukkuri_wav_starts_with_riff() {
         assert_eq!(found, 1, "{name} was not registered for version {version}");
     }
 
+    let clock = instance
+        .get_typed_func::<f64, ()>(&mut store, "aq_set_clock")
+        .unwrap();
+    clock.call(&mut store, 1_793_034_672_000.0).unwrap();
+
     let text = "ゆっくりしていってね".as_bytes();
     let text_at = 65_536u32;
     memory.write(&mut store, text_at as usize, text).unwrap();
-    let mut param = [0u8; 52];
+    let mut param = [0u8; 44];
     param[0..4].copy_from_slice(&1i32.to_le_bytes());
     param[8..12].copy_from_slice(&100i32.to_le_bytes());
-    // The voice reports -9999 until a license key is present.
-    if let Ok(key) = std::env::var("AQ01_DEV_KEY") {
-        let at = write_cstr(&memory, &mut store, 70_000, &key);
-        param[44..48].copy_from_slice(&at.to_le_bytes());
-    }
-    if let Ok(key) = std::env::var("AQ01_USR_KEY") {
-        let at = write_cstr(&memory, &mut store, 80_000, &key);
-        param[48..52].copy_from_slice(&at.to_le_bytes());
-    }
     let param_at = 66_000u32;
     memory.write(&mut store, param_at as usize, &param).unwrap();
     let synthesize = instance
@@ -88,13 +84,6 @@ fn yukkuri_wav_starts_with_riff() {
             (text_at, text.len() as u32, param_at, 0, out_ptr, out_len),
         )
         .unwrap();
-    let licensed =
-        std::env::var_os("AQ01_DEV_KEY").is_some() || std::env::var_os("AQ01_USR_KEY").is_some();
-    if !licensed {
-        // The voice module itself rejects an empty license with -9999.
-        assert_eq!(code, -9999, "aq_synthesize returned {code}");
-        return;
-    }
     assert_eq!(code, 0, "aq_synthesize returned {code}");
     let mut header = [0u8; 8];
     memory
@@ -109,18 +98,4 @@ fn yukkuri_wav_starts_with_riff() {
     let mut magic = [0u8; 4];
     memory.read(&mut store, ptr as usize, &mut magic).unwrap();
     assert_eq!(&magic, b"RIFF");
-}
-
-fn write_cstr(
-    memory: &wasmtime::Memory,
-    store: &mut wasmtime::Store<()>,
-    at: u32,
-    text: &str,
-) -> u32 {
-    let bytes = text.as_bytes();
-    memory.write(&mut *store, at as usize, bytes).unwrap();
-    memory
-        .write(&mut *store, at as usize + bytes.len(), &[0])
-        .unwrap();
-    at
 }

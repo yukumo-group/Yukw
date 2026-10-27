@@ -35,6 +35,7 @@ struct SyncCell<T>(Cell<T>);
 unsafe impl<T> Sync for SyncCell<T> {}
 
 static THREW: SyncCell<bool> = SyncCell(Cell::new(false));
+static CLOCK_MS: SyncCell<f64> = SyncCell(Cell::new(0.0));
 
 fn session() -> &'static Session {
     &SESSION.get_or_init(|| Shared(Session::new())).0
@@ -175,8 +176,6 @@ struct ParamAbi {
     accent: i32,
     lmd: i32,
     fsc: i32,
-    dev_key: u32,
-    user_key: u32,
 }
 
 fn read_text(ptr: u32, len: u32) -> String {
@@ -222,8 +221,6 @@ fn read_param(ptr: u32, phont_len: u32) -> Option<AqSynthParam> {
             unsafe { std::slice::from_raw_parts(raw.phont_data as *const u8, phont_len as usize) };
         param.phont_data = Some(bytes.to_vec());
     }
-    param.dev_key = read_cstr(raw.dev_key).filter(|text| !text.is_empty());
-    param.user_key = read_cstr(raw.user_key).filter(|text| !text.is_empty());
     Some(param)
 }
 
@@ -295,18 +292,11 @@ pub extern "C" fn aq_free(ptr: u32) {
     WAVS.0.set(wavs);
 }
 
+/// Wall time in milliseconds since the Unix epoch. `verifyLicense` compares a
+/// ticket's `exp` with this clock.
 #[unsafe(no_mangle)]
-pub extern "C" fn aq_set_keys(version: i32, dev: u32, dev_len: u32, usr: u32, usr_len: u32) {
-    let Some(version) = AqVersion::from_i32(version) else {
-        return;
-    };
-    let dev = non_empty(read_text(dev, dev_len));
-    let usr = non_empty(read_text(usr, usr_len));
-    session().set_keys(version, dev, usr);
-}
-
-fn non_empty(text: String) -> Option<String> {
-    if text.is_empty() { None } else { Some(text) }
+pub extern "C" fn aq_set_clock(ms: f64) {
+    CLOCK_MS.0.set(ms);
 }
 
 static ERR_BUF: SyncCell<[u8; 256]> = SyncCell(Cell::new([0; 256]));
@@ -367,7 +357,7 @@ pub extern "C" fn host__emscripten_random(_voice: i32) -> f32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host__emscripten_date_now(_voice: i32) -> f64 {
-    0.0
+    CLOCK_MS.0.get()
 }
 
 #[unsafe(no_mangle)]
@@ -380,11 +370,56 @@ pub extern "C" fn host__random_get(voice: i32, buf: i32, len: i32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn host___gmtime_js(voice: i32, _time: i64, tm: i32) -> i32 {
-    if tm != 0 {
-        Io.write(voice as u32, tm as u32, &[0; 36]);
+pub extern "C" fn host___gmtime_js(voice: i32, time: i64, tm: i32) -> i32 {
+    if tm == 0 || time < 0 {
+        return 1;
     }
+    let secs = time as u64;
+    let days = (secs / 86_400) as i64;
+    let (year, month, mday, yday, wday) = civil_from_unix_days(days);
+    let mut fields = [0u8; 32];
+    for (index, value) in [
+        (secs % 60) as i32,
+        ((secs / 60) % 60) as i32,
+        ((secs / 3_600) % 24) as i32,
+        mday,
+        month,
+        year,
+        wday,
+        yday,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        fields[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    Io.write(voice as u32, tm as u32, &fields);
     0
+}
+
+/// `(year - 1900, month 0-11, day of month, day of year, weekday)`.
+fn civil_from_unix_days(days: i64) -> (i32, i32, i32, i32, i32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let mut year = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let mday = (doy - (153 * mp + 2) / 5 + 1) as i32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as i32;
+    if month <= 2 {
+        year += 1;
+    }
+    let leaps_before = if month > 2 && is_leap(year) { 1 } else { 0 };
+    let month_starts = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+    let yday = month_starts[(month - 1) as usize] + mday - 1 + leaps_before;
+    let wday = ((days + 4).rem_euclid(7)) as i32;
+    ((year - 1900) as i32, month - 1, mday, yday, wday)
+}
+
+fn is_leap(year: i64) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
 #[unsafe(no_mangle)]

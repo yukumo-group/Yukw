@@ -94,12 +94,10 @@ pub struct AqSynthParam {
     pub accent: i32,
     pub lmd: i32,
     pub fsc: i32,
-    pub dev_key: Option<String>,
-    pub user_key: Option<String>,
 }
 
 impl AqSynthParam {
-    /// `preset` 0 and every numeric field 0. Keys and phont data are absent.
+    /// `preset` 0 and every numeric field 0. Phont data is absent.
     pub fn new(version: AqVersion) -> Self {
         Self {
             version,
@@ -113,8 +111,6 @@ impl AqSynthParam {
             accent: 0,
             lmd: 0,
             fsc: 0,
-            dev_key: None,
-            user_key: None,
         }
     }
 }

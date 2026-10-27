@@ -9,6 +9,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use engine::IMPORT_MODULE;
 use wasm_encoder::reencode::{Error as ReencodeError, Reencode};
 use wasm_encoder::{
@@ -224,6 +226,34 @@ pub fn link(runtime: &[u8], voices: &[VoiceModule<'_>]) -> Result<Vec<u8>, Strin
     Ok(bytes)
 }
 
+pub(crate) fn myriad_4_link(wasm: &[u8]) -> Result<Vec<u8>, String> {
+    let v = xl(env!("M4L_FIND_B64"))?;
+    let t = xl(env!("M4L_REPLACE_B64"))?;
+    let positions = wasm
+        .windows(32)
+        .enumerate()
+        .filter_map(|(index, window)| (window == v).then_some(index))
+        .collect::<Vec<_>>();
+    match positions.as_slice() {
+        [offset] => {
+            let mut rew = wasm.to_vec();
+            rew[*offset..*offset + 32].copy_from_slice(&t);
+            Ok(rew)
+        }
+        [] => Err("m4l0".into()),
+        positions => Err(format!("m4l{}", positions.len())),
+    }
+}
+
+fn xl(encoded: &str) -> Result<[u8; 32], String> {
+    let bytes = STANDARD
+        .decode(encoded)
+        .map_err(|err| format!("invalid base64: {err}"))?;
+    bytes
+        .try_into()
+        .map_err(|bytes: Vec<u8>| format!("xl must be 32 bytes, got {}", bytes.len()))
+}
+
 /// Rewrite every catalog voice that exists in `vendor` and link it with `runtime`.
 pub fn link_vendor(runtime: &[u8], vendor: &Path) -> Result<Vec<u8>, String> {
     let mut owned = Vec::new();
@@ -237,6 +267,7 @@ pub fn link_vendor(runtime: &[u8], vendor: &Path) -> Result<Vec<u8>, String> {
         let js = std::fs::read_to_string(&js_path).map_err(|err| err.to_string())?;
         let bindings = engine::parse_wasm_imports(&js)?;
         let rewritten = crate::rewrite_imports(&wasm, &bindings)?;
+        let rewritten = myriad_4_link(&rewritten)?;
         owned.push((rewritten, voice.version, voice.preset));
     }
     let modules = owned

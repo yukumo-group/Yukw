@@ -25,7 +25,7 @@ fn main() {
     });
     let vendor = workspace.join("vendor");
     let linked = aq_wasm::link_vendor(&runtime, &vendor).unwrap_or_else(|err| panic!("{err}"));
-    let out = target.join("aqtk/yukw.wasm");
+    let out = target.join("dist/yukw.wasm");
     std::fs::create_dir_all(out.parent().unwrap()).unwrap();
     std::fs::write(&out, &linked).unwrap();
     println!("{}", out.display());
