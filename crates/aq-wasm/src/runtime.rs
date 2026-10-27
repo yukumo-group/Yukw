@@ -47,16 +47,14 @@ impl VoiceIo for Io {
         if dst.is_empty() {
             return;
         }
-        let mut buf = vec![0; dst.len()];
         unsafe {
             voice_read(
                 voice as i32,
                 addr as i32,
-                buf.as_mut_ptr() as i32,
+                dst.as_mut_ptr() as i32,
                 dst.len() as i32,
             );
         }
-        dst.copy_from_slice(&buf);
     }
 
     fn write(&mut self, voice: u32, addr: u32, src: &[u8]) {
@@ -114,19 +112,22 @@ impl VoiceIo for Io {
     }
 }
 
-fn linked_voices() -> Vec<LinkedVoice> {
-    let count = unsafe { voice_count() }.max(0);
-    (0..count)
-        .map(|index| {
-            let packed = unsafe { voice_info(index) } as u64;
-            let version = AqVersion::from_i32((packed >> 32) as i32).unwrap_or(AqVersion::V1);
-            let preset = packed as u32 as i32;
-            LinkedVoice {
-                version,
-                aq1_preset: (version == AqVersion::V1).then_some(preset),
-            }
-        })
-        .collect()
+fn linked_voices() -> &'static [LinkedVoice] {
+    static VOICES: OnceLock<Vec<LinkedVoice>> = OnceLock::new();
+    VOICES.get_or_init(|| {
+        let count = unsafe { voice_count() }.max(0);
+        (0..count)
+            .map(|index| {
+                let packed = unsafe { voice_info(index) } as u64;
+                let version = AqVersion::from_i32((packed >> 32) as i32).unwrap_or(AqVersion::V1);
+                let preset = packed as u32 as i32;
+                LinkedVoice {
+                    version,
+                    aq1_preset: (version == AqVersion::V1).then_some(preset),
+                }
+            })
+            .collect()
+    })
 }
 
 fn ensure_init(voice: u32) {

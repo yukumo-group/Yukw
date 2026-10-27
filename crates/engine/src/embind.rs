@@ -4,6 +4,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::voice::{VoiceIo, WireVal, read_cstr, read_u32, write_u32};
 
@@ -105,8 +106,8 @@ enum EmValue {
     Number(f64),
     Str(String),
     Object(usize),
-    /// A typed-array copy. `memory_view` arguments become this.
-    Bytes(Vec<u8>),
+    /// A typed-array buffer. Clones share the bytes until a caller needs its own `Vec`.
+    Bytes(Arc<Vec<u8>>),
     /// A host constructor or global, such as `Uint8Array`.
     Global(String),
 }
@@ -211,18 +212,11 @@ impl Inner {
         }
     }
 
-    pub fn functions(&self, voice: u32) -> Vec<&BoundFn> {
+    pub fn function(&self, voice: u32, name: &str) -> Option<&BoundFn> {
         self.functions
             .iter()
-            .filter(|(id, _)| *id == voice)
+            .find(|(id, func)| *id == voice && func.name == name)
             .map(|(_, func)| func)
-            .collect()
-    }
-
-    pub fn function(&self, voice: u32, name: &str) -> Option<&BoundFn> {
-        self.functions(voice)
-            .into_iter()
-            .find(|func| func.name == name)
     }
 
     /// Field names of a value object, with each setter's type label.
@@ -691,12 +685,42 @@ impl Inner {
         self.types.get(&(voice, raw)).map(|info| info.kind.clone())
     }
 
+    fn slot_refs(&self, handle: u32) -> u32 {
+        self.slots
+            .get(handle as usize)
+            .and_then(|slot| slot.as_ref())
+            .map(|slot| slot.refs)
+            .unwrap_or(0)
+    }
+
     fn slot_value(&self, handle: u32) -> EmValue {
         self.slots
             .get(handle as usize)
             .and_then(|slot| slot.as_ref())
             .map(|slot| slot.value.clone())
             .unwrap_or(EmValue::Undef)
+    }
+
+    fn take_slot(&mut self, handle: u32) -> EmValue {
+        self.slots
+            .get_mut(handle as usize)
+            .and_then(|slot| slot.take())
+            .map(|slot| slot.value)
+            .unwrap_or(EmValue::Undef)
+    }
+
+    fn take_object(&mut self, id: usize) -> HashMap<String, EmValue> {
+        self.objects
+            .get_mut(id)
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+
+    fn bytes_at(&self, handle: u32) -> Option<&Arc<Vec<u8>>> {
+        match &self.slots.get(handle as usize)?.as_ref()?.value {
+            EmValue::Bytes(bytes) => Some(bytes),
+            _ => None,
+        }
     }
 
     fn alloc_emval(&mut self, value: EmValue) -> u32 {
@@ -1021,7 +1045,7 @@ impl Embind {
         }
         let value = match invoker.kind {
             1 => self.call_method(voice, handle, method_name, &values, io),
-            2 => self.construct(handle, &values, voice, io),
+            2 => self.construct(handle, &mut values, voice, io),
             3 => values.into_iter().next_back().unwrap_or(EmValue::Undef),
             _ => EmValue::Undef,
         };
@@ -1226,35 +1250,47 @@ impl Embind {
     }
 
     fn host_from_handle(&self, handle: u32) -> Result<HostValue, String> {
-        let value = self.inner.borrow().slot_value(handle);
-        let host = match &value {
+        let exclusive = handle > 9 && self.inner.borrow().slot_refs(handle) == 1;
+        let value = if exclusive {
+            self.inner.borrow_mut().take_slot(handle)
+        } else {
+            let value = self.inner.borrow().slot_value(handle);
+            self.emval_decref(handle);
+            value
+        };
+        Ok(self.consume_emval(value, exclusive, handle))
+    }
+
+    /// The last live handle moves its buffer out. A shared handle keeps the stored bytes.
+    fn consume_emval(&self, value: EmValue, exclusive: bool, handle: u32) -> HostValue {
+        match value {
             EmValue::Object(id) => {
-                let fields = self
-                    .inner
-                    .borrow()
-                    .objects
-                    .get(*id)
-                    .cloned()
-                    .unwrap_or_default();
+                let mut fields = if exclusive {
+                    self.inner.borrow_mut().take_object(id)
+                } else {
+                    self.inner
+                        .borrow()
+                        .objects
+                        .get(id)
+                        .cloned()
+                        .unwrap_or_default()
+                };
                 let code = fields.get("errorCode").map(number_i32).unwrap_or(0);
                 if code != 0 {
-                    HostValue::I32(if code > 0 { -code } else { code })
-                } else if let Some(EmValue::Bytes(bytes)) = fields.get("data") {
-                    HostValue::Bytes(bytes.clone())
-                } else if let Some(EmValue::Str(text)) = fields.get("data") {
-                    HostValue::Bytes(text.as_bytes().to_vec())
-                } else {
-                    HostValue::I32(handle as i32)
+                    return HostValue::I32(if code > 0 { -code } else { code });
+                }
+                match fields.remove("data") {
+                    Some(EmValue::Bytes(bytes)) => HostValue::Bytes(own_bytes(bytes)),
+                    Some(EmValue::Str(text)) => HostValue::Bytes(text.into_bytes()),
+                    _ => HostValue::I32(handle as i32),
                 }
             }
-            EmValue::Bytes(bytes) => HostValue::Bytes(bytes.clone()),
-            EmValue::Str(text) => HostValue::Text(text.clone()),
-            EmValue::Number(number) => HostValue::I32(*number as i32),
-            EmValue::Bool(value) => HostValue::I32(i32::from(*value)),
+            EmValue::Bytes(bytes) => HostValue::Bytes(own_bytes(bytes)),
+            EmValue::Str(text) => HostValue::Text(text),
+            EmValue::Number(number) => HostValue::I32(number as i32),
+            EmValue::Bool(bit) => HostValue::I32(i32::from(bit)),
             _ => HostValue::I32(handle as i32),
-        };
-        self.emval_decref(handle);
-        Ok(host)
+        }
     }
 
     fn read_em_arg(&self, voice: u32, raw: u32, addr: u32, io: &mut dyn VoiceIo) -> EmValue {
@@ -1270,7 +1306,7 @@ impl Embind {
             TypeKind::Int { size } => EmValue::Number(read_number(io, voice, addr, size, true)),
             TypeKind::Float { size } => EmValue::Number(read_number(io, voice, addr, size, false)),
             TypeKind::MemoryView { index } => {
-                EmValue::Bytes(self.read_view(voice, addr, index, io))
+                EmValue::Bytes(Arc::new(self.read_view(voice, addr, index, io)))
             }
             TypeKind::String | TypeKind::WString { .. } => {
                 let ptr = read_u32(io, voice, addr);
@@ -1339,7 +1375,7 @@ impl Embind {
     fn construct(
         &self,
         handle: u32,
-        args: &[EmValue],
+        args: &mut [EmValue],
         voice: u32,
         io: &mut dyn VoiceIo,
     ) -> EmValue {
@@ -1350,22 +1386,30 @@ impl Embind {
         if !name.ends_with("Array") {
             return EmValue::Undef;
         }
-        match args {
-            [EmValue::Number(len)] => {
-                EmValue::Bytes(vec![0; (*len as usize).min(32 * 1024 * 1024)])
-            }
-            [EmValue::Bytes(bytes)] => EmValue::Bytes(bytes.clone()),
-            [_, EmValue::Number(offset), EmValue::Number(len)] => {
-                let start = *offset as u32;
-                let count = (*len as usize).min(32 * 1024 * 1024);
-                let mut bytes = vec![0; count];
-                if count > 0 {
-                    io.read(voice, start, &mut bytes);
-                }
-                EmValue::Bytes(bytes)
-            }
-            _ => EmValue::Bytes(Vec::new()),
+        if args.len() == 1
+            && let Some(EmValue::Number(len)) = args.first()
+        {
+            let count = (*len as usize).min(32 * 1024 * 1024);
+            return EmValue::Bytes(Arc::new(vec![0u8; count]));
         }
+        if args.len() == 1 && matches!(args.first(), Some(EmValue::Bytes(_))) {
+            let EmValue::Bytes(bytes) = std::mem::replace(&mut args[0], EmValue::Undef) else {
+                return EmValue::Bytes(Arc::new(Vec::new()));
+            };
+            return EmValue::Bytes(bytes);
+        }
+        if args.len() == 3
+            && let (EmValue::Number(offset), EmValue::Number(len)) = (&args[1], &args[2])
+        {
+            let start = *offset as u32;
+            let count = (*len as usize).min(32 * 1024 * 1024);
+            let mut bytes = vec![0u8; count];
+            if count > 0 {
+                io.read(voice, start, &mut bytes);
+            }
+            return EmValue::Bytes(Arc::new(bytes));
+        }
+        EmValue::Bytes(Arc::new(Vec::new()))
     }
 
     fn call_method(
@@ -1377,18 +1421,18 @@ impl Embind {
         io: &mut dyn VoiceIo,
     ) -> EmValue {
         let name = read_cstr(io, voice, method_name);
+        if matches!(name.as_str(), "subarray" | "slice")
+            && let [EmValue::Number(start), EmValue::Number(end)] = args
+        {
+            let start = *start;
+            let end = *end;
+            let inner = self.inner.borrow();
+            if let Some(bytes) = inner.bytes_at(handle) {
+                return slice_bytes(bytes, start, end);
+            }
+        }
         let target = self.inner.borrow().slot_value(handle);
         match (target, name.as_str(), args) {
-            (EmValue::Bytes(bytes), "subarray", [EmValue::Number(start), EmValue::Number(end)]) => {
-                let start = (*start as usize).min(bytes.len());
-                let end = (*end as usize).min(bytes.len()).max(start);
-                EmValue::Bytes(bytes[start..end].to_vec())
-            }
-            (EmValue::Bytes(bytes), "slice", [EmValue::Number(start), EmValue::Number(end)]) => {
-                let start = (*start as usize).min(bytes.len());
-                let end = (*end as usize).min(bytes.len()).max(start);
-                EmValue::Bytes(bytes[start..end].to_vec())
-            }
             (EmValue::Object(id), method, _) => self
                 .inner
                 .borrow()
@@ -1398,6 +1442,23 @@ impl Embind {
                 .unwrap_or(EmValue::Undef),
             _ => EmValue::Undef,
         }
+    }
+}
+
+fn own_bytes(bytes: Arc<Vec<u8>>) -> Vec<u8> {
+    match Arc::<Vec<u8>>::try_unwrap(bytes) {
+        Ok(vec) => vec,
+        Err(shared) => Vec::clone(&shared),
+    }
+}
+
+fn slice_bytes(bytes: &Arc<Vec<u8>>, start: f64, end: f64) -> EmValue {
+    let start = (start as usize).min(bytes.len());
+    let end = (end as usize).min(bytes.len()).max(start);
+    if start == 0 && end == bytes.len() {
+        EmValue::Bytes(Arc::clone(bytes))
+    } else {
+        EmValue::Bytes(Arc::new(bytes[start..end].to_vec()))
     }
 }
 

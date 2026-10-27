@@ -223,23 +223,29 @@ pub fn link(runtime: &[u8], voices: &[VoiceModule<'_>]) -> Result<Vec<u8>, Strin
     Ok(bytes)
 }
 
-pub(crate) fn myriad_4_link(wasm: &[u8]) -> Result<Vec<u8>, String> {
-    let v = xl(env!("M4L_FIND_B64"))?;
-    let t = xl(env!("M4L_REPLACE_B64"))?;
-    let positions = wasm
-        .windows(32)
-        .enumerate()
-        .filter_map(|(index, window)| (window == v).then_some(index))
-        .collect::<Vec<_>>();
-    match positions.as_slice() {
-        [offset] => {
-            let mut rew = wasm.to_vec();
-            rew[*offset..*offset + 32].copy_from_slice(&t);
-            Ok(rew)
+/// Swap the embedded marker in a voice module.
+///
+/// Each vendor component carries its own copy. Every copy is replaced, so one
+/// component and a module that still holds several are patched the same way.
+pub fn myriad_4_link(wasm: &[u8]) -> Result<Vec<u8>, String> {
+    let find = xl(env!("M4L_FIND_B64"))?;
+    let replace = xl(env!("M4L_REPLACE_B64"))?;
+    let mut out = wasm.to_vec();
+    let mut index = 0;
+    let mut hits = 0usize;
+    while index + find.len() <= out.len() {
+        if out[index..index + find.len()] == find {
+            out[index..index + find.len()].copy_from_slice(&replace);
+            hits += 1;
+            index += find.len();
+        } else {
+            index += 1;
         }
-        [] => Err("m4l0".into()),
-        positions => Err(format!("m4l{}", positions.len())),
     }
+    if hits == 0 {
+        return Err("m4l0".into());
+    }
+    Ok(out)
 }
 
 fn xl(encoded: &str) -> Result<[u8; 32], String> {
@@ -772,7 +778,7 @@ fn shim_body(shim: &Shim) -> Function {
 }
 
 fn copy_fn(voices: &[VoiceRuntime], read: bool) -> Result<Function, String> {
-    let mut func = Function::new([(1, ValType::I32)]);
+    let mut func = Function::new([]);
     emit_switch(&mut func, voices.len() as u32, 0, |func, index| {
         let voice = &voices[index as usize];
         if read {
@@ -785,42 +791,18 @@ fn copy_fn(voices: &[VoiceRuntime], read: bool) -> Result<Function, String> {
     Ok(func)
 }
 
+/// `voice_read` / `voice_write` arguments are `(voice, addr, ptr, len)`.
+/// A zero length returns without touching either memory.
 fn emit_copy(func: &mut Function, src_mem: u32, src_base: u32, dst_mem: u32, dst_base: u32) {
-    op(func, Instruction::Loop(BlockType::Empty));
-    op(func, Instruction::LocalGet(4));
     op(func, Instruction::LocalGet(3));
-    op(func, Instruction::I32GeU);
+    op(func, Instruction::I32Eqz);
     op(func, Instruction::If(BlockType::Empty));
     op(func, Instruction::Return);
     op(func, Instruction::End);
     op(func, Instruction::LocalGet(dst_base));
-    op(func, Instruction::LocalGet(4));
-    op(func, Instruction::I32Add);
     op(func, Instruction::LocalGet(src_base));
-    op(func, Instruction::LocalGet(4));
-    op(func, Instruction::I32Add);
-    op(
-        func,
-        Instruction::I32Load8U(MemArg {
-            offset: 0,
-            align: 0,
-            memory_index: src_mem,
-        }),
-    );
-    op(
-        func,
-        Instruction::I32Store8(MemArg {
-            offset: 0,
-            align: 0,
-            memory_index: dst_mem,
-        }),
-    );
-    op(func, Instruction::LocalGet(4));
-    op(func, Instruction::I32Const(1));
-    op(func, Instruction::I32Add);
-    op(func, Instruction::LocalSet(4));
-    op(func, Instruction::Br(0));
-    op(func, Instruction::End);
+    op(func, Instruction::LocalGet(3));
+    op(func, Instruction::MemoryCopy { src_mem, dst_mem });
 }
 
 fn grow_fn(voices: &[VoiceRuntime]) -> Function {
@@ -1122,6 +1104,26 @@ fn convert_vals(types: &[ParserVal]) -> Result<Vec<ValType>, String> {
             other => Err(format!("unsupported value type {other:?}")),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{myriad_4_link, xl};
+
+    #[test]
+    fn myriad_4_link_replaces_every_copy() {
+        let find = xl(env!("M4L_FIND_B64")).unwrap();
+        let replace = xl(env!("M4L_REPLACE_B64")).unwrap();
+        let mut wasm = vec![7u8; 4];
+        wasm.extend_from_slice(&find);
+        wasm.extend_from_slice(&[9, 9]);
+        wasm.extend_from_slice(&find);
+        let out = myriad_4_link(&wasm).unwrap();
+        assert_eq!(out.len(), wasm.len());
+        assert_eq!(&out[4..36], &replace);
+        assert_eq!(&out[38..70], &replace);
+        assert!(myriad_4_link(&[1, 2, 3]).is_err());
+    }
 }
 
 fn const_i32(expr: &ConstExpr<'_>) -> Result<u32, String> {

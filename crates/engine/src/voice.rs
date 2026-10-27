@@ -51,15 +51,28 @@ pub(crate) fn read_cstr(io: &mut dyn VoiceIo, voice: u32, mut addr: u32) -> Stri
     if addr == 0 {
         return String::new();
     }
+    let limit = io.memory_pages(voice).saturating_mul(65_536);
     let mut bytes = Vec::new();
-    loop {
-        let mut byte = [0];
-        io.read(voice, addr, &mut byte);
-        if byte[0] == 0 || bytes.len() == 1_048_576 {
-            break;
+    let mut buf = [0u8; 256];
+    while bytes.len() < 1_048_576 {
+        let room = if addr < limit {
+            ((limit - addr) as usize)
+                .min(buf.len())
+                .min(1_048_576 - bytes.len())
+        } else {
+            1
+        };
+        io.read(voice, addr, &mut buf[..room]);
+        match buf[..room].iter().position(|byte| *byte == 0) {
+            Some(end) => {
+                bytes.extend_from_slice(&buf[..end]);
+                break;
+            }
+            None => {
+                bytes.extend_from_slice(&buf[..room]);
+                addr = addr.saturating_add(room as u32);
+            }
         }
-        bytes.push(byte[0]);
-        addr += 1;
     }
     String::from_utf8_lossy(&bytes).into_owned()
 }

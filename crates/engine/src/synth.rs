@@ -1,5 +1,7 @@
 //! Dispatch `AqSynthParam` onto the voice module that was linked for it.
 
+use std::cell::RefCell;
+
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
@@ -23,12 +25,15 @@ pub struct LinkedVoice {
 /// Embind registrations for the linked voices.
 pub struct Session {
     pub embind: Embind,
+    /// Voices whose `verifyLicense` has already completed.
+    licensed: RefCell<Vec<u32>>,
 }
 
 impl Session {
     pub fn new() -> Self {
         Self {
             embind: Embind::new(),
+            licensed: RefCell::new(Vec::new()),
         }
     }
 
@@ -83,21 +88,26 @@ impl Session {
         value_to_wav(value)
     }
 
-    fn apply_license(&self, voice: u32, io: &mut dyn VoiceIo) {
+    /// True when `verifyLicense` finished. A throw leaves the voice uncached so the next call retries.
+    fn apply_license(&self, voice: u32, io: &mut dyn VoiceIo) -> bool {
         let Some(func) = self.embind.function(voice, "verifyLicense") else {
-            return;
+            return true;
         };
         let jwt = license_jwt();
         let Some(args) = bind_key(&self.embind, voice, &func, &jwt) else {
-            return;
+            return false;
         };
-        let _ = self.embind.invoke(voice, &func, &args, io);
+        let finished = self.embind.invoke(voice, &func, &args, io).is_ok();
         self.embind.clear_threw();
+        finished
     }
 
-    /// `verifyLicense` takes the JWT. `synthe` takes the balance token that call issues.
+    /// `verifyLicense` runs once per voice. `synthe` takes a new balance token each call.
     fn balance_token(&self, voice: u32, io: &mut dyn VoiceIo) -> String {
-        self.apply_license(voice, io);
+        let fresh = !self.licensed.borrow().contains(&voice);
+        if fresh && self.apply_license(voice, io) {
+            self.licensed.borrow_mut().push(voice);
+        }
         let Some(func) = self.embind.function(voice, "issueBalanceToken") else {
             return String::new();
         };

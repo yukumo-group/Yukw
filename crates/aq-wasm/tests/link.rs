@@ -13,10 +13,10 @@ fn same_import_reads_each_voice_memory() {
             local.get 0
             i32.const 0
             i32.const 16
-            i32.const 1
+            i32.const 4
             call $read
             i32.const 16
-            i32.load8_u)
+            i32.load)
           (memory (export "memory") 1))
         "#,
     )
@@ -34,8 +34,8 @@ fn same_import_reads_each_voice_memory() {
         ))
         .unwrap()
     };
-    let first = voice("\\11");
-    let second = voice("\\22");
+    let first = voice("\\01\\02\\03\\04");
+    let second = voice("\\05\\06\\07\\08");
     let linked = link(
         &runtime,
         &[
@@ -66,6 +66,6 @@ fn same_import_reads_each_voice_memory() {
     let get1 = instance
         .get_typed_func::<(), i32>(&mut store, "v1_get")
         .unwrap();
-    assert_eq!(get0.call(&mut store, ()).unwrap(), 0x11);
-    assert_eq!(get1.call(&mut store, ()).unwrap(), 0x22);
+    assert_eq!(get0.call(&mut store, ()).unwrap(), 0x0403_0201);
+    assert_eq!(get1.call(&mut store, ()).unwrap(), 0x0807_0605);
 }
