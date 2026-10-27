@@ -2,6 +2,7 @@
 //! Registrations follow the emscripten glue in `vendor/aqtk*.js`.
 //! Pointers passed to these functions address that voice's memory.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::voice::{VoiceIo, WireVal, read_cstr, read_u32, write_u32};
@@ -78,6 +79,10 @@ enum EmValue {
     Number(f64),
     Str(String),
     Object(usize),
+    /// A typed-array copy. `memory_view` arguments become this.
+    Bytes(Vec<u8>),
+    /// A host constructor or global, such as `Uint8Array`.
+    Global(String),
 }
 
 struct EmSlot {
@@ -106,8 +111,15 @@ pub enum HostValue {
 }
 
 /// Registrations and emval handles for every voice in the linked module.
-#[derive(Default)]
+///
+/// State sits behind a [`RefCell`] so a voice can call back into the host
+/// while a synthesis call is still on the stack.
 pub struct Embind {
+    inner: RefCell<Inner>,
+}
+
+#[derive(Default)]
+struct Inner {
     types: HashMap<(u32, u32), TypeInfo>,
     functions: Vec<(u32, BoundFn)>,
     pending_fns: Vec<(u32, PendingFn)>,
@@ -116,11 +128,17 @@ pub struct Embind {
     threw: bool,
     slots: Vec<Option<EmSlot>>,
     objects: Vec<HashMap<String, EmValue>>,
-    invokers: Vec<(u32, u32, u32)>,
+    invokers: Vec<Invoker>,
 }
 
-impl Embind {
-    pub fn new() -> Self {
+#[derive(Clone)]
+struct Invoker {
+    types: Vec<u32>,
+    kind: u32,
+}
+
+impl Inner {
+    fn new() -> Self {
         let mut slots = Vec::new();
         // Match the handles the glue treats as fixed: 2 undefined, 4 null, 6 true, 8 false.
         for _ in 0..10 {
@@ -178,6 +196,44 @@ impl Embind {
         self.functions(voice)
             .into_iter()
             .find(|func| func.name == name)
+    }
+
+    /// Field names of a value object, with each setter's type label.
+    pub fn object_fields(&self, voice: u32, name: &str) -> Vec<String> {
+        self.types
+            .iter()
+            .find_map(|((id, _), info)| {
+                if *id != voice {
+                    return None;
+                }
+                match &info.kind {
+                    TypeKind::Object { name: found, data } if found == name => Some(
+                        data.fields
+                            .iter()
+                            .map(|field| {
+                                format!(
+                                    "{}:{}",
+                                    field.name,
+                                    self.type_label(voice, field.setter_type)
+                                )
+                            })
+                            .collect(),
+                    ),
+                    _ => None,
+                }
+            })
+            .unwrap_or_default()
+    }
+
+    /// True when `name` is a registered function or value-object type.
+    pub fn registered(&self, voice: u32, name: &str) -> bool {
+        if self.function(voice, name).is_some() {
+            return true;
+        }
+        self.types.iter().any(|((id, _), info)| {
+            *id == voice
+                && matches!(&info.kind, TypeKind::Object { name: found, .. } if found == name)
+        })
     }
 
     pub fn type_names(&self, voice: u32, func: &BoundFn) -> Vec<String> {
@@ -448,12 +504,10 @@ impl Embind {
 
     pub fn emval_get_global(&mut self, voice: u32, name_ptr: u32, io: &mut dyn VoiceIo) -> u32 {
         if name_ptr == 0 {
-            let id = self.objects.len();
-            self.objects.push(HashMap::new());
-            return self.alloc_emval(EmValue::Object(id));
+            return self.alloc_emval(EmValue::Global("globalThis".to_string()));
         }
         let name = read_cstr(io, voice, name_ptr);
-        self.alloc_emval(EmValue::Str(name))
+        self.alloc_emval(EmValue::Global(name))
     }
 
     pub fn emval_set_property(&mut self, object: u32, key: u32, value: u32) {
@@ -487,21 +541,21 @@ impl Embind {
         self.emval_decref(handle);
     }
 
-    pub fn emval_create_invoker(&mut self, arg_count: u32, arg_types: u32, kind: u32) -> u32 {
-        let id = self.invokers.len() as u32;
-        self.invokers.push((arg_count, arg_types, kind));
-        id
-    }
-
-    pub fn emval_invoke(
+    pub fn emval_create_invoker(
         &mut self,
-        _caller: u32,
-        _handle: u32,
-        _method: u32,
-        _destructors: u32,
-        _args: u32,
-    ) -> f64 {
-        0.0
+        voice: u32,
+        arg_count: u32,
+        arg_types: u32,
+        kind: u32,
+        io: &mut dyn VoiceIo,
+    ) -> u32 {
+        let mut types = Vec::with_capacity(arg_count as usize);
+        for index in 0..arg_count {
+            types.push(read_u32(io, voice, arg_types + index * 4));
+        }
+        let id = self.invokers.len() as u32;
+        self.invokers.push(Invoker { types, kind });
+        id
     }
 
     pub fn random(&mut self) -> f32 {
@@ -533,54 +587,6 @@ impl Embind {
                 write_u32(io, voice, ptr, 0);
             }
         }
-    }
-
-    /// Call a registered function. `args` follow the parameter types, not the return type.
-    pub fn invoke(
-        &mut self,
-        voice: u32,
-        func: &BoundFn,
-        args: &[HostArg],
-        io: &mut dyn VoiceIo,
-    ) -> Result<HostValue, String> {
-        if func.arg_types.len() < 1 {
-            return Err("function has no return type".to_string());
-        }
-        let params = &func.arg_types[1..];
-        if params.len() != args.len() {
-            return Err(format!(
-                "expected {} args, got {}",
-                params.len(),
-                args.len()
-            ));
-        }
-        let mut wired = Vec::with_capacity(params.len() + 1);
-        wired.push(WireVal::I32(func.func));
-        let mut free_list = Vec::new();
-        let mut object_dtors = Vec::new();
-        for (raw_type, arg) in params.iter().zip(args) {
-            wired.push(self.to_wire(
-                voice,
-                *raw_type,
-                arg,
-                io,
-                &mut free_list,
-                &mut object_dtors,
-            )?);
-        }
-        let invoker = func.invoker;
-        let ret_type = func.arg_types[0];
-        let returned = io.call(voice, invoker, &wired);
-        for ptr in free_list {
-            io.free(voice, ptr);
-        }
-        for (dtor, ptr) in object_dtors {
-            io.call(voice, dtor, &[WireVal::I32(ptr)]);
-        }
-        if self.threw {
-            return Err("voice raised".to_string());
-        }
-        self.from_wire(voice, ret_type, returned, io)
     }
 
     fn insert_type(&mut self, voice: u32, raw_type: u32, kind: TypeKind) {
@@ -669,8 +675,404 @@ impl Embind {
         }
     }
 
+    fn type_kind(&self, voice: u32, raw: u32) -> Option<TypeKind> {
+        self.types.get(&(voice, raw)).map(|info| info.kind.clone())
+    }
+
+    fn slot_value(&self, handle: u32) -> EmValue {
+        self.slots
+            .get(handle as usize)
+            .and_then(|slot| slot.as_ref())
+            .map(|slot| slot.value.clone())
+            .unwrap_or(EmValue::Undef)
+    }
+
+    fn alloc_emval(&mut self, value: EmValue) -> u32 {
+        self.slots.push(Some(EmSlot { value, refs: 1 }));
+        (self.slots.len() - 1) as u32
+    }
+
+    fn emval_string(&self, handle: u32) -> Option<String> {
+        match &self.slots.get(handle as usize)?.as_ref()?.value {
+            EmValue::Str(text) => Some(text.clone()),
+            EmValue::Number(value) => Some(value.to_string()),
+            _ => None,
+        }
+    }
+}
+
+impl Default for Embind {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Embind {
+    pub fn new() -> Self {
+        Self {
+            inner: RefCell::new(Inner::new()),
+        }
+    }
+
+    pub fn threw(&self) -> bool {
+        self.inner.borrow().threw()
+    }
+
+    pub fn clear_threw(&self) {
+        self.inner.borrow_mut().clear_threw();
+    }
+
+    pub fn is_inited(&self, voice: u32) -> bool {
+        self.inner.borrow().is_inited(voice)
+    }
+
+    pub fn mark_inited(&self, voice: u32) {
+        self.inner.borrow_mut().mark_inited(voice);
+    }
+
+    pub fn function(&self, voice: u32, name: &str) -> Option<BoundFn> {
+        self.inner.borrow().function(voice, name).cloned()
+    }
+
+    pub fn object_fields(&self, voice: u32, name: &str) -> Vec<String> {
+        self.inner.borrow().object_fields(voice, name)
+    }
+
+    pub fn registered(&self, voice: u32, name: &str) -> bool {
+        self.inner.borrow().registered(voice, name)
+    }
+
+    pub fn type_names(&self, voice: u32, func: &BoundFn) -> Vec<String> {
+        self.inner.borrow().type_names(voice, func)
+    }
+
+    pub fn flush_with(&self, voice: u32, io: &mut dyn VoiceIo) {
+        self.inner.borrow_mut().flush_with(voice, io);
+    }
+
+    pub fn register_void(&self, voice: u32, raw: u32, name: u32, io: &mut dyn VoiceIo) {
+        self.inner.borrow_mut().register_void(voice, raw, name, io);
+    }
+
+    pub fn register_bool(
+        &self,
+        voice: u32,
+        raw: u32,
+        name: u32,
+        yes: u32,
+        no: u32,
+        io: &mut dyn VoiceIo,
+    ) {
+        self.inner
+            .borrow_mut()
+            .register_bool(voice, raw, name, yes, no, io);
+    }
+
+    pub fn register_integer(
+        &self,
+        voice: u32,
+        raw: u32,
+        name: u32,
+        size: u32,
+        min: i32,
+        max: i32,
+        io: &mut dyn VoiceIo,
+    ) {
+        self.inner
+            .borrow_mut()
+            .register_integer(voice, raw, name, size, min, max, io);
+    }
+
+    pub fn register_bigint(
+        &self,
+        voice: u32,
+        raw: u32,
+        name: u32,
+        size: u32,
+        min: i64,
+        max: i64,
+        io: &mut dyn VoiceIo,
+    ) {
+        self.inner
+            .borrow_mut()
+            .register_bigint(voice, raw, name, size, min, max, io);
+    }
+
+    pub fn register_float(&self, voice: u32, raw: u32, name: u32, size: u32, io: &mut dyn VoiceIo) {
+        self.inner
+            .borrow_mut()
+            .register_float(voice, raw, name, size, io);
+    }
+
+    pub fn register_std_string(&self, voice: u32, raw: u32, name: u32, io: &mut dyn VoiceIo) {
+        self.inner
+            .borrow_mut()
+            .register_std_string(voice, raw, name, io);
+    }
+
+    pub fn register_std_wstring(
+        &self,
+        voice: u32,
+        raw: u32,
+        char_size: u32,
+        name: u32,
+        io: &mut dyn VoiceIo,
+    ) {
+        self.inner
+            .borrow_mut()
+            .register_std_wstring(voice, raw, char_size, name, io);
+    }
+
+    pub fn register_emval(&self, voice: u32, raw: u32) {
+        self.inner.borrow_mut().register_emval(voice, raw);
+    }
+
+    pub fn register_memory_view(
+        &self,
+        voice: u32,
+        raw: u32,
+        data_type: u32,
+        name: u32,
+        io: &mut dyn VoiceIo,
+    ) {
+        self.inner
+            .borrow_mut()
+            .register_memory_view(voice, raw, data_type, name, io);
+    }
+
+    pub fn register_value_object(
+        &self,
+        voice: u32,
+        raw: u32,
+        name: u32,
+        ctor_sig: u32,
+        ctor: u32,
+        dtor_sig: u32,
+        dtor: u32,
+    ) {
+        self.inner
+            .borrow_mut()
+            .register_value_object(voice, raw, name, ctor_sig, ctor, dtor_sig, dtor);
+    }
+
+    pub fn register_value_object_field(
+        &self,
+        voice: u32,
+        struct_type: u32,
+        field_name: u32,
+        getter_type: u32,
+        getter_sig: u32,
+        getter: u32,
+        getter_context: u32,
+        setter_type: u32,
+        setter_sig: u32,
+        setter: u32,
+        setter_context: u32,
+        io: &mut dyn VoiceIo,
+    ) {
+        self.inner.borrow_mut().register_value_object_field(
+            voice,
+            struct_type,
+            field_name,
+            getter_type,
+            getter_sig,
+            getter,
+            getter_context,
+            setter_type,
+            setter_sig,
+            setter,
+            setter_context,
+            io,
+        );
+    }
+
+    pub fn finalize_value_object(&self, voice: u32, struct_type: u32, io: &mut dyn VoiceIo) {
+        self.inner
+            .borrow_mut()
+            .finalize_value_object(voice, struct_type, io);
+    }
+
+    pub fn register_function(
+        &self,
+        voice: u32,
+        name: u32,
+        arg_count: u32,
+        arg_types: u32,
+        signature: u32,
+        invoker: u32,
+        func: u32,
+        is_async: u32,
+        is_nonnull_return: u32,
+        io: &mut dyn VoiceIo,
+    ) {
+        self.inner.borrow_mut().register_function(
+            voice,
+            name,
+            arg_count,
+            arg_types,
+            signature,
+            invoker,
+            func,
+            is_async,
+            is_nonnull_return,
+            io,
+        );
+    }
+
+    pub fn cxa_throw(&self, voice: u32, ptr: u32, ty: u32, destructor: u32) {
+        self.inner
+            .borrow_mut()
+            .cxa_throw(voice, ptr, ty, destructor);
+    }
+
+    pub fn abort(&self) {
+        self.inner.borrow_mut().abort();
+    }
+
+    pub fn resize_heap(&self, voice: u32, requested: u32, io: &mut dyn VoiceIo) -> i32 {
+        self.inner.borrow_mut().resize_heap(voice, requested, io)
+    }
+
+    pub fn random(&self) -> f32 {
+        self.inner.borrow_mut().random()
+    }
+
+    pub fn date_now(&self) -> f64 {
+        self.inner.borrow_mut().date_now()
+    }
+
+    pub fn random_get(&self, voice: u32, buf: u32, len: u32, io: &mut dyn VoiceIo) -> i32 {
+        self.inner.borrow_mut().random_get(voice, buf, len, io)
+    }
+
+    pub fn gmtime(&self, voice: u32, time: i64, tm_ptr: u32, io: &mut dyn VoiceIo) -> i32 {
+        self.inner.borrow_mut().gmtime(voice, time, tm_ptr, io)
+    }
+
+    pub fn tzset(&self, voice: u32, a: u32, b: u32, c: u32, d: u32, io: &mut dyn VoiceIo) {
+        self.inner.borrow_mut().tzset(voice, a, b, c, d, io);
+    }
+
+    pub fn emval_decref(&self, handle: u32) {
+        self.inner.borrow_mut().emval_decref(handle);
+    }
+
+    pub fn emval_incref(&self, handle: u32) {
+        self.inner.borrow_mut().emval_incref(handle);
+    }
+
+    pub fn emval_new_cstring(&self, voice: u32, ptr: u32, io: &mut dyn VoiceIo) -> u32 {
+        self.inner.borrow_mut().emval_new_cstring(voice, ptr, io)
+    }
+
+    pub fn emval_new_object(&self) -> u32 {
+        self.inner.borrow_mut().emval_new_object()
+    }
+
+    pub fn emval_get_global(&self, voice: u32, name: u32, io: &mut dyn VoiceIo) -> u32 {
+        self.inner.borrow_mut().emval_get_global(voice, name, io)
+    }
+
+    pub fn emval_set_property(&self, object: u32, key: u32, value: u32) {
+        self.inner
+            .borrow_mut()
+            .emval_set_property(object, key, value);
+    }
+
+    pub fn emval_run_destructors(&self, handle: u32) {
+        self.inner.borrow_mut().emval_run_destructors(handle);
+    }
+
+    pub fn emval_create_invoker(
+        &self,
+        voice: u32,
+        arg_count: u32,
+        arg_types: u32,
+        kind: u32,
+        io: &mut dyn VoiceIo,
+    ) -> u32 {
+        self.inner
+            .borrow_mut()
+            .emval_create_invoker(voice, arg_count, arg_types, kind, io)
+    }
+
+    /// `args` follows the parameter types, not the return type.
+    pub fn invoke(
+        &self,
+        voice: u32,
+        func: &BoundFn,
+        args: &[HostArg],
+        io: &mut dyn VoiceIo,
+    ) -> Result<HostValue, String> {
+        if func.arg_types.len() < 1 {
+            return Err("function has no return type".to_string());
+        }
+        let params = &func.arg_types[1..];
+        if params.len() != args.len() {
+            return Err(format!(
+                "expected {} args, got {}",
+                params.len(),
+                args.len()
+            ));
+        }
+        let mut wired = Vec::with_capacity(params.len() + 1);
+        wired.push(WireVal::I32(func.func));
+        let mut free_list = Vec::new();
+        let mut object_dtors = Vec::new();
+        for (raw_type, arg) in params.iter().zip(args) {
+            wired.push(self.to_wire(
+                voice,
+                *raw_type,
+                arg,
+                io,
+                &mut free_list,
+                &mut object_dtors,
+            )?);
+        }
+        let returned = io.call(voice, func.invoker, &wired);
+        for ptr in free_list {
+            io.free(voice, ptr);
+        }
+        for (dtor, ptr) in object_dtors {
+            io.call(voice, dtor, &[WireVal::I32(ptr)]);
+        }
+        if self.threw() {
+            return Err("voice raised".to_string());
+        }
+        self.from_wire(voice, func.arg_types[0], returned, io)
+    }
+
+    /// Run one invoker created by `__emval_create_invoker`. The return is the f64 wire value.
+    pub fn emval_invoke(
+        &self,
+        voice: u32,
+        caller: u32,
+        handle: u32,
+        method_name: u32,
+        _destructors: u32,
+        args: u32,
+        io: &mut dyn VoiceIo,
+    ) -> f64 {
+        let Some(invoker) = self.inner.borrow().invokers.get(caller as usize).cloned() else {
+            return 0.0;
+        };
+        let mut values = Vec::with_capacity(invoker.types.len().saturating_sub(1));
+        for (index, raw) in invoker.types.iter().skip(1).enumerate() {
+            let addr = args.saturating_add((index * 8) as u32);
+            values.push(self.read_em_arg(voice, *raw, addr, io));
+        }
+        let value = match invoker.kind {
+            1 => self.call_method(voice, handle, method_name, &values, io),
+            2 => self.construct(handle, &values, voice, io),
+            3 => values.into_iter().next_back().unwrap_or(EmValue::Undef),
+            _ => EmValue::Undef,
+        };
+        let ret = invoker.types.first().copied().unwrap_or(0);
+        self.write_return(voice, ret, value)
+    }
+
     fn to_wire(
-        &mut self,
+        &self,
         voice: u32,
         raw_type: u32,
         arg: &HostArg,
@@ -679,9 +1081,9 @@ impl Embind {
         object_dtors: &mut Vec<(u32, u32)>,
     ) -> Result<WireVal, String> {
         let kind = self
-            .types
-            .get(&(voice, raw_type))
-            .map(|info| info.kind.clone())
+            .inner
+            .borrow()
+            .type_kind(voice, raw_type)
             .ok_or_else(|| format!("unknown type {raw_type}"))?;
         match (kind, arg) {
             (TypeKind::Void, _) => Ok(WireVal::None),
@@ -703,34 +1105,17 @@ impl Embind {
                 }
             }
             (TypeKind::String, HostArg::Text(text)) => {
-                let bytes = text.as_bytes();
-                let base = io.malloc(voice, (4 + bytes.len() + 1) as u32);
-                if base == 0 {
-                    return Err("malloc failed".to_string());
-                }
-                write_u32(io, voice, base, bytes.len() as u32);
-                io.write(voice, base + 4, bytes);
-                io.write(voice, base + 4 + bytes.len() as u32, &[0]);
-                free_list.push(base);
-                Ok(WireVal::I32(base))
+                self.alloc_string(voice, text.as_bytes(), io, free_list)
+            }
+            (TypeKind::WString { char_size }, HostArg::Text(text)) => {
+                self.alloc_wstring(voice, text, char_size, io, free_list)
             }
             (TypeKind::String, HostArg::Bytes(bytes)) => {
-                let base = io.malloc(voice, (4 + bytes.len() + 1) as u32);
-                if base == 0 {
-                    return Err("malloc failed".to_string());
-                }
-                write_u32(io, voice, base, bytes.len() as u32);
-                io.write(voice, base + 4, bytes);
-                io.write(voice, base + 4 + bytes.len() as u32, &[0]);
-                free_list.push(base);
-                Ok(WireVal::I32(base))
+                self.alloc_string(voice, bytes, io, free_list)
             }
             (TypeKind::Object { data, .. }, HostArg::Object(fields)) => {
-                let ctor = data.ctor;
-                let dtor = data.dtor;
-                let field_defs = data.fields.clone();
-                let ptr = io.call(voice, ctor, &[]).as_i32();
-                for field in &field_defs {
+                let ptr = io.call(voice, data.ctor, &[]).as_i32();
+                for field in &data.fields {
                     let value = fields
                         .iter()
                         .find(|(name, _)| name == &field.name)
@@ -744,24 +1129,75 @@ impl Embind {
                         &[WireVal::I32(field.setter_context), WireVal::I32(ptr), wired],
                     );
                 }
-                object_dtors.push((dtor, ptr));
+                object_dtors.push((data.dtor, ptr));
                 Ok(WireVal::I32(ptr))
             }
             (kind, arg) => Err(format!("cannot convert {arg:?} to {kind:?}")),
         }
     }
 
+    fn alloc_wstring(
+        &self,
+        voice: u32,
+        text: &str,
+        char_size: u32,
+        io: &mut dyn VoiceIo,
+        free_list: &mut Vec<u32>,
+    ) -> Result<WireVal, String> {
+        let encoded: Vec<u8> = if char_size == 4 {
+            text.chars()
+                .flat_map(|ch| (ch as u32).to_le_bytes())
+                .collect()
+        } else {
+            text.encode_utf16()
+                .flat_map(|unit| unit.to_le_bytes())
+                .collect()
+        };
+        let units = encoded.len() / char_size.max(1) as usize;
+        let base = io.malloc(voice, (4 + encoded.len() + char_size as usize) as u32);
+        if base == 0 {
+            return Err("malloc failed".to_string());
+        }
+        write_u32(io, voice, base, units as u32);
+        io.write(voice, base + 4, &encoded);
+        io.write(
+            voice,
+            base + 4 + encoded.len() as u32,
+            &vec![0; char_size as usize],
+        );
+        free_list.push(base);
+        Ok(WireVal::I32(base))
+    }
+
+    fn alloc_string(
+        &self,
+        voice: u32,
+        bytes: &[u8],
+        io: &mut dyn VoiceIo,
+        free_list: &mut Vec<u32>,
+    ) -> Result<WireVal, String> {
+        let base = io.malloc(voice, (4 + bytes.len() + 1) as u32);
+        if base == 0 {
+            return Err("malloc failed".to_string());
+        }
+        write_u32(io, voice, base, bytes.len() as u32);
+        io.write(voice, base + 4, bytes);
+        io.write(voice, base + 4 + bytes.len() as u32, &[0]);
+        free_list.push(base);
+        Ok(WireVal::I32(base))
+    }
+
     fn from_wire(
-        &mut self,
+        &self,
         voice: u32,
         raw_type: u32,
         value: WireVal,
         io: &mut dyn VoiceIo,
     ) -> Result<HostValue, String> {
         let kind = self
-            .types
-            .get(&(voice, raw_type))
-            .map(|info| info.kind.clone())
+            .inner
+            .borrow()
+            .type_kind(voice, raw_type)
             .ok_or_else(|| format!("unknown return type {raw_type}"))?;
         match kind {
             TypeKind::Void => Ok(HostValue::Void),
@@ -804,19 +1240,7 @@ impl Embind {
                 if handle == 0 {
                     return Ok(HostValue::Bytes(Vec::new()));
                 }
-                let size = read_u32(io, voice, handle) as usize;
-                let data = read_u32(io, voice, handle + 4);
-                let elem = match index {
-                    2 | 3 => 2,
-                    4 | 5 | 6 => 4,
-                    7 | 8 | 9 => 8,
-                    _ => 1,
-                };
-                let mut bytes = vec![0; size.saturating_mul(elem)];
-                if !bytes.is_empty() && data != 0 {
-                    io.read(voice, data, &mut bytes);
-                }
-                Ok(HostValue::Bytes(bytes))
+                Ok(HostValue::Bytes(self.read_view(voice, handle, index, io)))
             }
             TypeKind::Object { data, .. } => {
                 let ptr = value.as_i32();
@@ -838,20 +1262,210 @@ impl Embind {
                 io.call(voice, data.dtor, &[WireVal::I32(ptr)]);
                 Ok(HostValue::Text(text))
             }
-            TypeKind::Bigint { .. } | TypeKind::Emval => Ok(HostValue::I32(value.as_i32() as i32)),
+            TypeKind::Bigint { .. } => Ok(HostValue::I32(value.as_i32() as i32)),
+            TypeKind::Emval => self.host_from_handle(value.as_i32()),
         }
     }
 
-    fn alloc_emval(&mut self, value: EmValue) -> u32 {
-        self.slots.push(Some(EmSlot { value, refs: 1 }));
-        (self.slots.len() - 1) as u32
+    fn host_from_handle(&self, handle: u32) -> Result<HostValue, String> {
+        let value = self.inner.borrow().slot_value(handle);
+        let host = match &value {
+            EmValue::Object(id) => {
+                let fields = self
+                    .inner
+                    .borrow()
+                    .objects
+                    .get(*id)
+                    .cloned()
+                    .unwrap_or_default();
+                let code = fields.get("errorCode").map(number_i32).unwrap_or(0);
+                if code != 0 {
+                    HostValue::I32(if code > 0 { -code } else { code })
+                } else if let Some(EmValue::Bytes(bytes)) = fields.get("data") {
+                    HostValue::Bytes(bytes.clone())
+                } else if let Some(EmValue::Str(text)) = fields.get("data") {
+                    HostValue::Bytes(text.as_bytes().to_vec())
+                } else {
+                    HostValue::I32(handle as i32)
+                }
+            }
+            EmValue::Bytes(bytes) => HostValue::Bytes(bytes.clone()),
+            EmValue::Str(text) => HostValue::Text(text.clone()),
+            EmValue::Number(number) => HostValue::I32(*number as i32),
+            EmValue::Bool(value) => HostValue::I32(i32::from(*value)),
+            _ => HostValue::I32(handle as i32),
+        };
+        self.emval_decref(handle);
+        Ok(host)
     }
 
-    fn emval_string(&self, handle: u32) -> Option<String> {
-        match &self.slots.get(handle as usize)?.as_ref()?.value {
-            EmValue::Str(text) => Some(text.clone()),
-            EmValue::Number(value) => Some(value.to_string()),
-            _ => None,
+    fn read_em_arg(&self, voice: u32, raw: u32, addr: u32, io: &mut dyn VoiceIo) -> EmValue {
+        let Some(kind) = self.inner.borrow().type_kind(voice, raw) else {
+            return EmValue::Undef;
+        };
+        match kind {
+            TypeKind::Bool { .. } => {
+                let mut byte = [0];
+                io.read(voice, addr, &mut byte);
+                EmValue::Bool(byte[0] != 0)
+            }
+            TypeKind::Int { size } => EmValue::Number(read_number(io, voice, addr, size, true)),
+            TypeKind::Float { size } => EmValue::Number(read_number(io, voice, addr, size, false)),
+            TypeKind::MemoryView { index } => {
+                EmValue::Bytes(self.read_view(voice, addr, index, io))
+            }
+            TypeKind::String | TypeKind::WString { .. } => {
+                let ptr = read_u32(io, voice, addr);
+                if ptr == 0 {
+                    return EmValue::Str(String::new());
+                }
+                let len = read_u32(io, voice, ptr) as usize;
+                let mut bytes = vec![0; len];
+                if len > 0 {
+                    io.read(voice, ptr + 4, &mut bytes);
+                }
+                io.free(voice, ptr);
+                EmValue::Str(String::from_utf8_lossy(&bytes).into_owned())
+            }
+            TypeKind::Emval => {
+                let handle = read_u32(io, voice, addr);
+                let value = self.inner.borrow().slot_value(handle);
+                self.emval_decref(handle);
+                value
+            }
+            TypeKind::Void | TypeKind::Bigint { .. } | TypeKind::Object { .. } => EmValue::Undef,
         }
+    }
+
+    fn read_view(&self, voice: u32, addr: u32, index: u32, io: &mut dyn VoiceIo) -> Vec<u8> {
+        let count = read_u32(io, voice, addr) as usize;
+        let data = read_u32(io, voice, addr + 4);
+        let elem = match index {
+            2 | 3 => 2,
+            4 | 5 | 6 => 4,
+            7 | 8 | 9 => 8,
+            _ => 1,
+        };
+        let nbytes = count.saturating_mul(elem).min(32 * 1024 * 1024);
+        let mut bytes = vec![0; nbytes];
+        if nbytes > 0 && data != 0 {
+            io.read(voice, data, &mut bytes);
+        }
+        bytes
+    }
+
+    fn write_return(&self, voice: u32, raw: u32, value: EmValue) -> f64 {
+        let Some(kind) = self.inner.borrow().type_kind(voice, raw) else {
+            return 0.0;
+        };
+        match kind {
+            TypeKind::Void => 0.0,
+            TypeKind::Emval => self.inner.borrow_mut().alloc_emval(value) as f64,
+            TypeKind::Bool { yes, no } => {
+                let on = match &value {
+                    EmValue::Bool(bit) => *bit,
+                    EmValue::Number(number) => *number != 0.0,
+                    _ => false,
+                };
+                if on { yes as f64 } else { no as f64 }
+            }
+            TypeKind::Int { .. } | TypeKind::Float { .. } => match value {
+                EmValue::Number(number) => number,
+                EmValue::Bool(bit) => f64::from(u8::from(bit)),
+                _ => 0.0,
+            },
+            _ => 0.0,
+        }
+    }
+
+    fn construct(
+        &self,
+        handle: u32,
+        args: &[EmValue],
+        voice: u32,
+        io: &mut dyn VoiceIo,
+    ) -> EmValue {
+        let ctor = self.inner.borrow().slot_value(handle);
+        let EmValue::Global(name) = ctor else {
+            return EmValue::Undef;
+        };
+        if !name.ends_with("Array") {
+            return EmValue::Undef;
+        }
+        match args {
+            [EmValue::Number(len)] => {
+                EmValue::Bytes(vec![0; (*len as usize).min(32 * 1024 * 1024)])
+            }
+            [EmValue::Bytes(bytes)] => EmValue::Bytes(bytes.clone()),
+            [_, EmValue::Number(offset), EmValue::Number(len)] => {
+                let start = *offset as u32;
+                let count = (*len as usize).min(32 * 1024 * 1024);
+                let mut bytes = vec![0; count];
+                if count > 0 {
+                    io.read(voice, start, &mut bytes);
+                }
+                EmValue::Bytes(bytes)
+            }
+            _ => EmValue::Bytes(Vec::new()),
+        }
+    }
+
+    fn call_method(
+        &self,
+        voice: u32,
+        handle: u32,
+        method_name: u32,
+        args: &[EmValue],
+        io: &mut dyn VoiceIo,
+    ) -> EmValue {
+        let name = read_cstr(io, voice, method_name);
+        let target = self.inner.borrow().slot_value(handle);
+        match (target, name.as_str(), args) {
+            (EmValue::Bytes(bytes), "subarray", [EmValue::Number(start), EmValue::Number(end)]) => {
+                let start = (*start as usize).min(bytes.len());
+                let end = (*end as usize).min(bytes.len()).max(start);
+                EmValue::Bytes(bytes[start..end].to_vec())
+            }
+            (EmValue::Bytes(bytes), "slice", [EmValue::Number(start), EmValue::Number(end)]) => {
+                let start = (*start as usize).min(bytes.len());
+                let end = (*end as usize).min(bytes.len()).max(start);
+                EmValue::Bytes(bytes[start..end].to_vec())
+            }
+            (EmValue::Object(id), method, _) => self
+                .inner
+                .borrow()
+                .objects
+                .get(id)
+                .and_then(|fields| fields.get(method).cloned())
+                .unwrap_or(EmValue::Undef),
+            _ => EmValue::Undef,
+        }
+    }
+}
+
+fn read_number(io: &mut dyn VoiceIo, voice: u32, addr: u32, size: u32, integer: bool) -> f64 {
+    let mut buf = [0; 8];
+    let take = (size as usize).clamp(1, 8);
+    io.read(voice, addr, &mut buf[..take]);
+    if !integer {
+        return if size > 4 {
+            f64::from_le_bytes(buf)
+        } else {
+            f32::from_le_bytes(buf[..4].try_into().unwrap()).into()
+        };
+    }
+    match size {
+        1 => buf[0] as i8 as f64,
+        2 => i16::from_le_bytes([buf[0], buf[1]]) as f64,
+        8 => i64::from_le_bytes(buf) as f64,
+        _ => i32::from_le_bytes(buf[..4].try_into().unwrap()) as f64,
+    }
+}
+
+fn number_i32(value: &EmValue) -> i32 {
+    match value {
+        EmValue::Number(number) => *number as i32,
+        EmValue::Bool(bit) => i32::from(*bit),
+        _ => 0,
     }
 }

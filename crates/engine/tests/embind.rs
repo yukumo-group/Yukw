@@ -79,7 +79,7 @@ fn registration_records_synthe_and_call_wires_the_string() {
     io.mem[64..68].copy_from_slice(&1u32.to_le_bytes());
     io.mem[68..72].copy_from_slice(&2u32.to_le_bytes());
 
-    let mut embind = Embind::new();
+    let embind = Embind::new();
     embind.register_void(0, 1, 0, &mut io);
     embind.register_std_string(0, 2, 8, &mut io);
     embind.register_function(0, 32, 2, 64, 48, 10, 11, 0, 0, &mut io);

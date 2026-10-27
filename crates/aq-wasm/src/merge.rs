@@ -7,6 +7,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::path::Path;
 
 use engine::IMPORT_MODULE;
 use wasm_encoder::reencode::{Error as ReencodeError, Reencode};
@@ -21,6 +22,68 @@ use wasmparser::{
 };
 
 const VOICE_MODULE: &str = "voice";
+
+/// A voice file the linker looks for under `vendor/`, in link order.
+pub struct CatalogVoice {
+    pub file: &'static str,
+    pub version: i32,
+    pub preset: i32,
+}
+
+/// Present voice modules, skipping `aqtk1-imd` because vendor has no such file.
+/// `jgr` keeps preset 8 so a missing `imd1` does not renumber it.
+pub const VOICE_CATALOG: &[CatalogVoice] = &[
+    CatalogVoice {
+        file: "aqtk1-f1",
+        version: 1,
+        preset: 0,
+    },
+    CatalogVoice {
+        file: "aqtk1-f2",
+        version: 1,
+        preset: 1,
+    },
+    CatalogVoice {
+        file: "aqtk1-f3",
+        version: 1,
+        preset: 2,
+    },
+    CatalogVoice {
+        file: "aqtk1-m1",
+        version: 1,
+        preset: 3,
+    },
+    CatalogVoice {
+        file: "aqtk1-m2",
+        version: 1,
+        preset: 4,
+    },
+    CatalogVoice {
+        file: "aqtk1-r1",
+        version: 1,
+        preset: 5,
+    },
+    CatalogVoice {
+        file: "aqtk1-dvd",
+        version: 1,
+        preset: 6,
+    },
+    CatalogVoice {
+        file: "aqtk1-jgr",
+        version: 1,
+        preset: 8,
+    },
+    CatalogVoice {
+        file: "aqtk2",
+        version: 2,
+        preset: -1,
+    },
+    CatalogVoice {
+        file: "aqtk10",
+        version: 10,
+        preset: -1,
+    },
+];
 
 /// A voice wasm whose imports already use `env.<semantic>`.
 pub struct VoiceModule<'a> {
@@ -159,6 +222,32 @@ pub fn link(runtime: &[u8], voices: &[VoiceModule<'_>]) -> Result<Vec<u8>, Strin
     let bytes = module.finish();
     wasmparser::validate(&bytes).map_err(|err| err.to_string())?;
     Ok(bytes)
+}
+
+/// Rewrite every catalog voice that exists in `vendor` and link it with `runtime`.
+pub fn link_vendor(runtime: &[u8], vendor: &Path) -> Result<Vec<u8>, String> {
+    let mut owned = Vec::new();
+    for voice in VOICE_CATALOG {
+        let wasm_path = vendor.join(format!("{}.wasm", voice.file));
+        let js_path = vendor.join(format!("{}.js", voice.file));
+        if !wasm_path.exists() {
+            continue;
+        }
+        let wasm = std::fs::read(&wasm_path).map_err(|err| err.to_string())?;
+        let js = std::fs::read_to_string(&js_path).map_err(|err| err.to_string())?;
+        let bindings = engine::parse_wasm_imports(&js)?;
+        let rewritten = crate::rewrite_imports(&wasm, &bindings)?;
+        owned.push((rewritten, voice.version, voice.preset));
+    }
+    let modules = owned
+        .iter()
+        .map(|(bytes, version, preset)| VoiceModule {
+            wasm: bytes,
+            version: *version,
+            preset: *preset,
+        })
+        .collect::<Vec<_>>();
+    link(runtime, &modules)
 }
 
 struct Shim {
@@ -324,6 +413,8 @@ fn voice_op_index(name: &str) -> Result<u32, String> {
         "voice_malloc" => 5,
         "voice_free" => 6,
         "voice_info" => 7,
+        "voice_count" => 8,
+        "voice_pages" => 9,
         other => return Err(format!("unknown voice import {other}")),
     };
     Ok(index)
@@ -576,6 +667,14 @@ fn emit_voice_ops(
         &[ValType::I32],
         &[ValType::I64],
     )?;
+    let count = op_type(out, imported, "voice_count", &[], &[ValType::I32])?;
+    let pages = op_type(
+        out,
+        imported,
+        "voice_pages",
+        &[ValType::I32],
+        &[ValType::I32],
+    )?;
 
     out.functions.function(read);
     out.code.function(&copy_fn(voices, true)?);
@@ -593,7 +692,27 @@ fn emit_voice_ops(
     out.code.function(&free_fn(voices));
     out.functions.function(info);
     out.code.function(&info_fn(voices));
+    out.functions.function(count);
+    out.code.function(&count_fn(voices.len() as i32));
+    out.functions.function(pages);
+    out.code.function(&pages_fn(voices));
     Ok(())
+}
+
+fn count_fn(voices: i32) -> Function {
+    let mut func = Function::new([]);
+    op(&mut func, Instruction::I32Const(voices));
+    op(&mut func, Instruction::End);
+    func
+}
+
+fn pages_fn(voices: &[VoiceRuntime]) -> Function {
+    let mut func = Function::new([]);
+    emit_switch(&mut func, voices.len() as u32, 0, |func, index| {
+        op(func, Instruction::MemorySize(voices[index as usize].memory));
+    });
+    op(&mut func, Instruction::End);
+    func
 }
 
 fn op_type(

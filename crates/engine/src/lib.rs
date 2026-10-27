@@ -18,5 +18,5 @@ pub use param::{
 pub use preset::{
     AQ1_VOICES, AQ2_PHONTS, AQ10_VOICES, Aq10Voice, aq1_voice_name, aq2_phont_name, aq10_voice,
 };
-pub use synth::{ERR_ARG, ERR_OPEN, ERR_VERSION, LinkedVoice, Session};
+pub use synth::{ERR_ARG, ERR_OPEN, ERR_VERSION, LinkedVoice, Session, find_voice};
 pub use voice::{VoiceIo, WireVal};

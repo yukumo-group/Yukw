@@ -1,5 +1,6 @@
 //! Dispatch `AqSynthParam` onto the voice module that was linked for it.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::embind::{BoundFn, Embind, HostArg, HostValue};
@@ -28,23 +29,25 @@ struct KeyPair {
 /// Keys from `Engine::set_keys` plus the embind registrations.
 pub struct Session {
     pub embind: Embind,
-    keys: HashMap<i32, KeyPair>,
+    keys: RefCell<HashMap<i32, KeyPair>>,
 }
 
 impl Session {
     pub fn new() -> Self {
         Self {
             embind: Embind::new(),
-            keys: HashMap::new(),
+            keys: RefCell::new(HashMap::new()),
         }
     }
 
-    pub fn set_keys(&mut self, version: AqVersion, dev: Option<String>, usr: Option<String>) {
-        self.keys.insert(version as i32, KeyPair { dev, usr });
+    pub fn set_keys(&self, version: AqVersion, dev: Option<String>, usr: Option<String>) {
+        self.keys
+            .borrow_mut()
+            .insert(version as i32, KeyPair { dev, usr });
     }
 
     /// Run a voice's initializer once. The initializer calls back into embind.
-    pub fn init_voice(&mut self, voice: u32, io: &mut dyn VoiceIo) {
+    pub fn init_voice(&self, voice: u32, io: &mut dyn VoiceIo) {
         if self.embind.is_inited(voice) {
             return;
         }
@@ -54,7 +57,7 @@ impl Session {
     }
 
     pub fn synthesize(
-        &mut self,
+        &self,
         voices: &[LinkedVoice],
         io: &mut dyn VoiceIo,
         param: &AqSynthParam,
@@ -70,11 +73,7 @@ impl Session {
             return Err(ERR_OPEN);
         }
         self.apply_license(voice, param, io);
-        let func = self
-            .embind
-            .function(voice, "synthe")
-            .cloned()
-            .ok_or(ERR_OPEN)?;
+        let func = self.embind.function(voice, "synthe").ok_or(ERR_OPEN)?;
         let voice_row = if param.version == AqVersion::V10 {
             aq10_voice(param)
         } else {
@@ -89,15 +88,16 @@ impl Session {
         value_to_wav(value)
     }
 
-    fn apply_license(&mut self, voice: u32, param: &AqSynthParam, io: &mut dyn VoiceIo) {
+    fn apply_license(&self, voice: u32, param: &AqSynthParam, io: &mut dyn VoiceIo) {
         let stored = self
             .keys
+            .borrow()
             .get(&(param.version as i32))
             .cloned()
             .unwrap_or_default();
         let dev = pick(&param.dev_key, stored.dev.as_deref());
         let usr = pick(&param.user_key, stored.usr.as_deref());
-        let Some(func) = self.embind.function(voice, "verifyLicense").cloned() else {
+        let Some(func) = self.embind.function(voice, "verifyLicense") else {
             return;
         };
         for key in [dev, usr].into_iter().flatten() {
@@ -126,7 +126,7 @@ fn pick<'a>(param_key: &'a Option<String>, stored: Option<&'a str>) -> Option<&'
     }
 }
 
-fn find_voice(voices: &[LinkedVoice], param: &AqSynthParam) -> Option<u32> {
+pub fn find_voice(voices: &[LinkedVoice], param: &AqSynthParam) -> Option<u32> {
     voices
         .iter()
         .position(|voice| match param.version {
@@ -157,25 +157,44 @@ fn bind_args(
         .count();
     let mut ints = int_args(param, row, int_count);
     let mut used_text = false;
+    let mut used_phont = false;
+    let mut used_key = false;
     let mut args = Vec::with_capacity(labels.len());
     for label in &labels {
         if label == "string" || label == "wstring" {
             if !used_text {
                 args.push(HostArg::Text(text.to_string()));
                 used_text = true;
-            } else if let Some(phont) = param.phont.as_deref().filter(|phont| !phont.is_empty()) {
+            } else if !used_phont
+                && let Some(phont) = param.phont.as_deref().filter(|phont| !phont.is_empty())
+            {
                 args.push(HostArg::Text(phont.to_string()));
+                used_phont = true;
+            } else if !used_key {
+                let key = param
+                    .user_key
+                    .as_deref()
+                    .filter(|key| !key.is_empty())
+                    .or(param.dev_key.as_deref().filter(|key| !key.is_empty()))
+                    .unwrap_or("");
+                args.push(HostArg::Text(key.to_string()));
+                used_key = true;
             } else {
-                return None;
+                args.push(HostArg::Text(String::new()));
             }
+        } else if label == "bool" {
+            args.push(HostArg::I32(0));
         } else if label.starts_with("int") {
             args.push(HostArg::I32(ints.next()?));
         } else if label == "float4" || label == "float8" {
             args.push(HostArg::F64(param.speed as f64));
-        } else if let Some(row) = row {
-            args.push(object_arg(row));
-        } else if param.phont_data.is_some() && label.starts_with("view") {
-            args.push(HostArg::Bytes(param.phont_data.clone().unwrap_or_default()));
+        } else if label.starts_with("view") {
+            let Some(bytes) = param.phont_data.clone() else {
+                return None;
+            };
+            args.push(HostArg::Bytes(bytes));
+        } else if let Some(object) = object_arg(embind, voice, label, param, row) {
+            args.push(object);
         } else {
             return None;
         }
@@ -200,16 +219,45 @@ fn int_args(
     values.into_iter()
 }
 
-fn object_arg(row: &Aq10Voice) -> HostArg {
-    HostArg::Object(vec![
-        ("bas".to_string(), HostArg::I32(row.bas)),
-        ("spd".to_string(), HostArg::I32(row.spd)),
-        ("vol".to_string(), HostArg::I32(row.vol)),
-        ("pit".to_string(), HostArg::I32(row.pit)),
-        ("acc".to_string(), HostArg::I32(row.acc)),
-        ("lmd".to_string(), HostArg::I32(row.lmd)),
-        ("fsc".to_string(), HostArg::I32(row.fsc)),
-    ])
+fn object_arg(
+    embind: &Embind,
+    voice: u32,
+    label: &str,
+    param: &AqSynthParam,
+    row: Option<&Aq10Voice>,
+) -> Option<HostArg> {
+    let specs = embind.object_fields(voice, label);
+    if specs.is_empty() {
+        return None;
+    }
+    let mut fields = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let (name, _) = spec.split_once(':')?;
+        fields.push((
+            name.to_string(),
+            HostArg::I32(field_value(name, param, row)?),
+        ));
+    }
+    Some(HostArg::Object(fields))
+}
+
+fn field_value(name: &str, param: &AqSynthParam, row: Option<&Aq10Voice>) -> Option<i32> {
+    let picked = |value: i32| Some(value);
+    match name {
+        "bas" => picked(row.map(|row| row.bas).unwrap_or(param.base)),
+        "spd" => picked(row.map(|row| row.spd).unwrap_or(or_100(param.speed))),
+        "vol" => picked(row.map(|row| row.vol).unwrap_or(or_100(param.volume))),
+        "pit" => picked(row.map(|row| row.pit).unwrap_or(or_100(param.pitch))),
+        "acc" => picked(row.map(|row| row.acc).unwrap_or(or_100(param.accent))),
+        "lmd" => picked(row.map(|row| row.lmd).unwrap_or(or_100(param.lmd))),
+        "fsc" => picked(row.map(|row| row.fsc).unwrap_or(or_100(param.fsc))),
+        "monotone" => Some(0),
+        _ => None,
+    }
+}
+
+fn or_100(value: i32) -> i32 {
+    if value == 0 { 100 } else { value }
 }
 
 fn bind_key(embind: &Embind, voice: u32, func: &BoundFn, key: &str) -> Option<Vec<HostArg>> {

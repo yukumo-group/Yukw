@@ -9,4 +9,7 @@ mod merge;
 #[cfg(not(target_arch = "wasm32"))]
 pub use link::{import_names, rewrite_imports};
 #[cfg(not(target_arch = "wasm32"))]
-pub use merge::{VoiceModule, link};
+pub use merge::{CatalogVoice, VOICE_CATALOG, VoiceModule, link, link_vendor};
+
+#[cfg(target_arch = "wasm32")]
+mod runtime;
