@@ -1,14 +1,12 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Compatibility layer for the AquesTalk engines, matching `aqtk-shim`.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+mod param;
+mod preset;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use param::{
+    AQ1_PRESET_COUNT, AQ2_PRESET_COUNT, AQ10_PRESET_COUNT, Aq1Preset, Aq2Preset, Aq10Preset,
+    AqSynthParam, AqVersion,
+};
+pub use preset::{
+    AQ1_VOICES, AQ2_PHONTS, AQ10_VOICES, Aq10Voice, aq1_voice_name, aq2_phont_name, aq10_voice,
+};
