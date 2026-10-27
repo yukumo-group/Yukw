@@ -17,3 +17,4 @@ wasmparser = "0.262.0"
 
 [dev-dependencies]
 wasmtime = "50.0.0"
+wat = "1.262.0"

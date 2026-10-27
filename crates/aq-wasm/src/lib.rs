@@ -3,6 +3,10 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 mod link;
+#[cfg(not(target_arch = "wasm32"))]
+mod merge;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use link::{import_names, rewrite_imports};
+#[cfg(not(target_arch = "wasm32"))]
+pub use merge::{VoiceModule, link};
