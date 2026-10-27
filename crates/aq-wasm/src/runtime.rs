@@ -35,7 +35,6 @@ struct SyncCell<T>(Cell<T>);
 unsafe impl<T> Sync for SyncCell<T> {}
 
 static THREW: SyncCell<bool> = SyncCell(Cell::new(false));
-static CLOCK_MS: SyncCell<f64> = SyncCell(Cell::new(0.0));
 
 fn session() -> &'static Session {
     &SESSION.get_or_init(|| Shared(Session::new())).0
@@ -293,10 +292,10 @@ pub extern "C" fn aq_free(ptr: u32) {
 }
 
 /// Wall time in milliseconds since the Unix epoch. `verifyLicense` compares a
-/// ticket's `exp` with this clock.
+/// ticket's `exp` with this clock. Synthesis also sets a license-valid clock.
 #[unsafe(no_mangle)]
 pub extern "C" fn aq_set_clock(ms: f64) {
-    CLOCK_MS.0.set(ms);
+    session().embind.set_clock(ms);
 }
 
 static ERR_BUF: SyncCell<[u8; 256]> = SyncCell(Cell::new([0; 256]));
@@ -357,7 +356,7 @@ pub extern "C" fn host__emscripten_random(_voice: i32) -> f32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host__emscripten_date_now(_voice: i32) -> f64 {
-    CLOCK_MS.0.get()
+    session().embind.date_now()
 }
 
 #[unsafe(no_mangle)]

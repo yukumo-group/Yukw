@@ -129,6 +129,7 @@ struct Inner {
     slots: Vec<Option<EmSlot>>,
     objects: Vec<HashMap<String, EmValue>>,
     invokers: Vec<Invoker>,
+    clock_ms: f64,
 }
 
 #[derive(Clone)]
@@ -562,8 +563,12 @@ impl Inner {
         0.0
     }
 
+    pub fn set_clock(&mut self, ms: f64) {
+        self.clock_ms = ms;
+    }
+
     pub fn date_now(&mut self) -> f64 {
-        0.0
+        self.clock_ms
     }
 
     pub fn random_get(&mut self, voice: u32, buf: u32, len: u32, io: &mut dyn VoiceIo) -> i32 {
@@ -935,6 +940,10 @@ impl Embind {
 
     pub fn random(&self) -> f32 {
         self.inner.borrow_mut().random()
+    }
+
+    pub fn set_clock(&self, ms: f64) {
+        self.inner.borrow_mut().set_clock(ms);
     }
 
     pub fn date_now(&self) -> f64 {

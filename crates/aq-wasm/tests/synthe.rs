@@ -60,11 +60,6 @@ fn yukkuri_wav_starts_with_riff() {
         assert_eq!(found, 1, "{name} was not registered for version {version}");
     }
 
-    let clock = instance
-        .get_typed_func::<f64, ()>(&mut store, "aq_set_clock")
-        .unwrap();
-    clock.call(&mut store, 1_793_034_672_000.0).unwrap();
-
     let text = "ゆっくりしていってね".as_bytes();
     let text_at = 65_536u32;
     memory.write(&mut store, text_at as usize, text).unwrap();

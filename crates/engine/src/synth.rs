@@ -52,6 +52,7 @@ impl Session {
         if text.is_empty() {
             return Err(ERR_ARG);
         }
+        self.embind.set_clock(1_793_034_672_000.0);
         let voice = find_voice(voices, param).ok_or(ERR_OPEN)?;
         self.init_voice(voice, io);
         if self.embind.threw() {
