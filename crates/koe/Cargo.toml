@@ -1,0 +1,4 @@
+[package]
+name = "koe"
+edition.workspace = true
+version.workspace = true

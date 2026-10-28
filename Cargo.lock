@@ -683,8 +683,13 @@ dependencies = [
  "aq-wasm",
  "base64 0.23.1",
  "embind",
+ "koe",
  "wasmtime",
 ]
+
+[[package]]
+name = "koe"
+version = "0.1.0"
 
 [[package]]
 name = "leb128fmt"

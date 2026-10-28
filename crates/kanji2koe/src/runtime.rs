@@ -4,8 +4,9 @@ use std::cell::Cell;
 use std::sync::OnceLock;
 
 use embind::VoiceIo;
+use koe::ToKoe;
 
-use crate::{ERR_OPEN, ERR_SCRIPT, LinkedScript, Script, Session, find_script};
+use crate::{ERR_OPEN, ERR_SCRIPT, LinkedScript, Reader, Script, Session, find_script};
 
 #[link(wasm_import_module = "voice")]
 unsafe extern "C" {
@@ -112,8 +113,9 @@ pub extern "C" fn aqk_convert(
         return ERR_SCRIPT;
     };
     let text = read_text(text, text_len);
-    let scripts = linked_scripts();
-    let result = session().convert(scripts, &mut Io, script, &text);
+    let mut io = Io;
+    let mut reader = Reader::new(session(), linked_scripts(), &mut io, script);
+    let result = reader.to_koe(&text).map_err(|err| err.code);
     if THREW.0.replace(false) {
         return ERR_OPEN;
     }

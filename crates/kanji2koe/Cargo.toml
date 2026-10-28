@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 base64 = "0.23.1"
 embind = { path = "../embind" }
+koe = { path = "../koe" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 aq-wasm = { path = "../aq-wasm" }

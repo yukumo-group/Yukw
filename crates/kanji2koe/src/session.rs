@@ -166,6 +166,38 @@ impl Default for Session {
 /// Same instant the voice engines present to `verifyLicense`.
 const LICENSE_CLOCK_MS: f64 = 1_793_034_672_000.0;
 
+/// A [`koe::ToKoe`] view of one linked dictionary.
+pub struct Reader<'a> {
+    session: &'a Session,
+    scripts: &'a [LinkedScript],
+    io: &'a mut dyn VoiceIo,
+    script: Script,
+}
+
+impl<'a> Reader<'a> {
+    pub fn new(
+        session: &'a Session,
+        scripts: &'a [LinkedScript],
+        io: &'a mut dyn VoiceIo,
+        script: Script,
+    ) -> Self {
+        Self {
+            session,
+            scripts,
+            io,
+            script,
+        }
+    }
+}
+
+impl koe::ToKoe for Reader<'_> {
+    fn to_koe(&mut self, text: &str) -> Result<String, koe::Error> {
+        self.session
+            .convert(self.scripts, self.io, self.script, text)
+            .map_err(koe::Error::new)
+    }
+}
+
 pub fn find_script(scripts: &[LinkedScript], script: Script) -> Option<u32> {
     scripts
         .iter()
