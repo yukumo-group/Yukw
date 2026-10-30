@@ -6,6 +6,12 @@ version.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+# Link the relocatable AquesTalk archives from aquestalk-wasm into this module.
+# Set AQTK_RELOC_DIR to the directory produced by scripts/build-reloc.sh.
+static-engines = []
+
 [dependencies]
 embind = { path = "../embind" }
 synth = { path = "../synth" }
