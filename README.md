@@ -1,146 +1,158 @@
+**English** · [中文](README.zh.md)
+
 # Yukw
 
-Yukw 是 AquesTalk 的 Rust/WebAssembly 运行时，同时也是
-[aqtk-shim](https://github.com/yukumo-group/aqtk-shim) 的进化版：一个面向
-wasm、更适合 Web 与嵌入式的 AquesTalk1/2/10 兼容层。它把
-[aquestalk-wasm](https://github.com/yukumo-group/aquestalk-wasm) 中的 C 引擎
-编译成可重定位归档，再由 `wasm-ld`（cargo 在 `wasm32-unknown-unknown` 上使用的
-rust-lld）和 Rust 代码链接成**单个 wasm 模块**：
+Yukw is a Rust/WebAssembly runtime for AquesTalk and the evolution of
+[aqtk-shim](https://github.com/yukumo-group/aqtk-shim): a WebAssembly-native
+AquesTalk1/2/10 compatibility layer for the web and embedded runtimes. It links
+the C engines from
+[aquestalk-wasm](https://github.com/yukumo-group/aquestalk-wasm) — built there
+as relocatable archives — with Rust code through `wasm-ld` (the rust-lld that
+cargo uses for `wasm32-unknown-unknown`) into **a single wasm module**:
 
 - **0 imports**
-- **恰好 1 个 linear memory**（浏览器不支持 multi-memory，这是可移植的前提）
-- 不包含 **embind / Emscripten** 运行时，也不需要每个声库各自的 memory
+- **exactly one linear memory** (browsers do not support multi-memory, so this
+  is what makes the module portable)
+- **no embind/Emscripten runtime** and no per-voice memory
 
-## 与 aqtk-shim 的关系
+## Relationship to aqtk-shim
 
-Yukw 同时是 [aqtk-shim](https://github.com/yukumo-group/aqtk-shim) 的进化版。
-两者都是 AquesTalk1/2/10 的统一兼容层，沿用同一套参数模型、预设编号和错误码
-语义：`AqSynthParam` 的核心字段、`AqVersion`（1/2/10）、
-`Aq1Preset`/`Aq2Preset`/`Aq10Preset`，以及 `AQ1_*`/`AQ2_*`/`AQ10_*` 错误名。
+Yukw is also the evolution of
+[aqtk-shim](https://github.com/yukumo-group/aqtk-shim). Both are unified
+AquesTalk1/2/10 compatibility layers and share the same parameter model, preset
+numbering, and error semantics: the core `AqSynthParam` fields, `AqVersion`
+(1/2/10), `Aq1Preset`/`Aq2Preset`/`Aq10Preset`, and the `AQ1_*`/`AQ2_*`/`AQ10_*`
+error names.
 
-aqtk-shim 面向桌面，在运行时加载 Windows/macOS/Linux 的原生动态库；Yukw 面向
-wasm，把同样的引擎在链接期合并进一个 Rust 模块：
+aqtk-shim targets the desktop and loads native Windows/macOS/Linux libraries at
+runtime; Yukw targets wasm and merges the same engines into one Rust module at
+link time:
 
 | | aqtk-shim | Yukw |
 | --- | --- | --- |
-| 运行环境 | Windows / macOS / Linux 原生 | 任意 wasm32 运行时、浏览器 |
-| 引擎来源 | 官方 SDK 动态库 | aquestalk-wasm 的可重定位归档 |
-| 模块形态 | `Aqsh` 动态库 + `Aqsh.h` | 单个 wasm：0 imports、1 memory |
-| 语音库加载 | 运行时按目录/`phont/` 查找 | 链接期静态合并 |
-| 许可证 | `AqShim_Init(.env)`、`DevKey`/`UserKey` | 评价版引擎；暂不提供 `AqShim_Init` |
-| Kanji2Koe | 无 | 独立的 `kanji2koe` 模块 |
+| Runtime | native Windows / macOS / Linux | any wasm32 runtime, browsers |
+| Engine source | official SDK dynamic libraries | relocatable archives from aquestalk-wasm |
+| Shape | `Aqsh` shared library + `Aqsh.h` | one wasm: 0 imports, 1 memory |
+| Voice loading | runtime directory / `phont/` lookup | static merge at link time |
+| Licensing | `AqShim_Init(.env)`, `DevKey`/`UserKey` | evaluation engines; `AqShim_Init` not provided yet |
+| Kanji2Koe | none | separate `kanji2koe` module |
 
-因此可以把 Yukw 看作 aqtk-shim 在 WebAssembly 上的后继：参数/预设/错误语义
-对齐，wasm 侧入口是 `aq_synthesize`（见 [ABI](#abi)），而不是原生 `Aqsh` 的
-二进制 drop-in。
+Yukw can therefore be seen as the WebAssembly successor to aqtk-shim:
+parameter, preset, and error semantics are aligned, but the wasm entry point is
+`aq_synthesize` (see [ABI](#abi)), not a binary drop-in for native `Aqsh`.
 
-## 功能
+## Features
 
-| 能力 | 模块 | 主要导出 |
+| Capability | Module | Main exports |
 | --- | --- | --- |
-| AquesTalk1/2/10 语音合成 | `aq-wasm` | `aq_synthesize`、`aq_free`、`aq_error_message`、`aq_set_clock` |
-| 引擎直通 API | `aq-wasm` | `aq1_*`、`aq2_*`、`aq10_*`、`aqk2k_*`、`aqusr_*` |
-| 汉字假名混合文 → 假名 | `kanji2koe` | `aqk_load`、`aqk_convert`、`aqk_free` |
-| 文本转读音抽象 | `koe` | `ToKoe`、`Error` |
+| AquesTalk1/2/10 speech synthesis | `aq-wasm` | `aq_synthesize`, `aq_free`, `aq_error_message`, `aq_set_clock` |
+| Direct engine API | `aq-wasm` | `aq1_*`, `aq2_*`, `aq10_*`, `aqk2k_*`, `aqusr_*` |
+| Kanji/kana mixed text to kana | `kanji2koe` | `aqk_load`, `aqk_convert`, `aqk_free` |
+| Text-to-reading abstraction | `koe` | `ToKoe`, `Error` |
 
-## 目录
+## Layout
 
 ```
 Yukw/
 ├── crates/
-│   ├── aq-wasm/      # wasm32 合成运行时；链接 5 个引擎归档
-│   ├── kanji2koe/    # 独立的 Kanji2Koe 模块；只链接 libaqk2k.a
-│   ├── synth/        # AqSynthParam、版本、预设、错误信息
+│   ├── aq-wasm/      # wasm32 synthesis runtime; links the five engine archives
+│   ├── kanji2koe/    # standalone Kanji2Koe module; links only libaqk2k.a
+│   ├── synth/        # AqSynthParam, versions, presets, error messages
 │   ├── koe/          # ToKoe trait
-│   ├── character/    # 占位 crate（目前只有示例 add）
-│   └── script/       # 占位 crate（目前只有示例 add）
-├── examples/         # Python/wasmtime 示例与可选基准
+│   ├── character/    # placeholder crate (only the sample add right now)
+│   └── script/       # placeholder crate (only the sample add right now)
+├── examples/         # Python/wasmtime example and optional benchmark
 ├── justfile
 └── Cargo.toml
 ```
 
-`aq-wasm` 和 `kanji2koe` 都是 `cdylib`；host 侧构建时它们是普通的 Rust rlib。
-只有 `target_arch = "wasm32"` 时 `build.rs` 才会链接 C 引擎归档。
+`aq-wasm` and `kanji2koe` are both `cdylib`s; for host builds they are ordinary
+Rust rlibs. `build.rs` links the C engine archives only when
+`target_arch = "wasm32"`.
 
-## 子模块与 wasm 依赖
+## Submodules and wasm dependencies
 
-**本仓库没有 Git submodule，也没有 `.gitmodules`。** 所有 Rust 依赖都在
-`crates/` 内或来自 crates.io。wasm 相关依赖分三类：
+**This repository has no Git submodules and no `.gitmodules`.** All Rust
+dependencies live under `crates/` or come from crates.io. The wasm-related
+dependencies fall into three groups:
 
-### 1. 构建期静态链接的引擎归档
+### 1. Engine archives linked at build time
 
-引擎不是以 wasm 文件形式 vendored 进来，而是由相邻的
-`aquestalk-wasm` 仓库生成**可重定位归档**（`.o` 的 `.a` 包），再由
-rust-lld 直接链接进 Rust 模块：
+The engines are not vendored as wasm files. The sibling `aquestalk-wasm`
+repository builds **relocatable archives** (`.a` files containing `.o` objects)
+and rust-lld links them into the Rust module:
 
-| 归档 | 引擎 | 使用方 |
+| Archive | Engine | Used by |
 | --- | --- | --- |
-| `libaq1.a` | AquesTalk1（9 声库） | `aq-wasm` |
+| `libaq1.a` | AquesTalk1 (9 voices) | `aq-wasm` |
 | `libaq2.a` | AquesTalk2 | `aq-wasm` |
 | `libaq10.a` | AquesTalk10 | `aq-wasm` |
-| `libaqk2k.a` | AqKanji2Koe | `aq-wasm`、`kanji2koe` |
+| `libaqk2k.a` | AqKanji2Koe | `aq-wasm`, `kanji2koe` |
 | `libaqusr.a` | AqUsrDic | `aq-wasm` |
-| `libaqhost.a` | C 侧 string/stdio/time/trap | 两者 |
-| `exports.txt` | 公开符号清单（`--export=`） | `aq-wasm/build.rs` |
+| `libaqhost.a` | C-side string/stdio/time/trap | both |
+| `exports.txt` | public symbol list (`--export=`) | `aq-wasm/build.rs` |
 
-默认目录是相邻 checkout 的 `../aquestalk-wasm/dist/reloc`，可用
-`AQTK_RELOC_DIR` 覆盖。`aq-wasm/build.rs` 用 `--whole-archive` 链接全部五个
-引擎；`kanji2koe/build.rs` 只链接 `libaqk2k.a`。Rust 侧
-[host_alloc.rs](crates/aq-wasm/src/host_alloc.rs) 提供 C 的
-`malloc/free/calloc/realloc`，底层是 Rust 全局分配器。
+The default directory is `../aquestalk-wasm/dist/reloc` in a sibling checkout;
+set `AQTK_RELOC_DIR` to override it. `aq-wasm/build.rs` links all five engines
+with `--whole-archive`; `kanji2koe/build.rs` links only `libaqk2k.a`. On the
+Rust side, [host_alloc.rs](crates/aq-wasm/src/host_alloc.rs) provides C
+`malloc/free/calloc/realloc` on top of Rust's global allocator.
 
-### 2. 运行期数据
+### 2. Runtime data
 
-- AqKanji2Koe 的 `lookup.bin`、`aqdic.bin`、`aq_user.dic` 是**授权数据，不在
-  仓库里**。宿主在运行时写入 wasm 内存并调用 `aqk_load`；`kanji2koe` 的测试用
-  `AQK2K_DIC_DIR` 指向词典目录（或相邻 aquestalk-wasm 的
-  `engines/aqk2k/aqk2k_lnx/aq_dic`）。
-- AquesTalk2 的 phont 以 `phont_data` 指针传入；静态模块没有文件系统，
-  `AqSynthParam::phont` 路径字段不再被读取。
+- AqKanji2Koe's `lookup.bin`, `aqdic.bin`, and `aq_user.dic` are **licensed
+  data and are not in the repository**. The host writes them into wasm memory at
+  runtime and calls `aqk_load`; the `kanji2koe` tests use `AQK2K_DIC_DIR` to
+  point at the dictionary directory (or at
+  `engines/aqk2k/aqk2k_lnx/aq_dic` in a sibling aquestalk-wasm checkout).
+- AquesTalk2 phonts are passed as a `phont_data` pointer. The static module has
+  no filesystem, so the `AqSynthParam::phont` path field is no longer read.
 
-### 3. 可选的本地 `vendor/`（gitignored）
+### 3. Optional local `vendor/` (gitignored)
 
-`vendor/` 里是旧的 Emscripten 构建的 wasm 模块，**运行时不再使用**，仅
-`examples/bench.mjs` 用来做对比基准。它不是 submodule，不参与构建，也不需要
-提交。
+`vendor/` contains wasm modules from the old Emscripten build. The runtime **no
+longer uses them**; only `examples/bench.mjs` loads them for comparison
+benchmarks. It is not a submodule, does not participate in the build, and does
+not need to be committed.
 
-## 构建
+## Building
 
-需要：
+Requirements:
 
-- Rust + `wasm32-unknown-unknown` target
-- 构建 aquestalk-wasm 时的 LLVM wasm32 工具链（`clang`、`wasm-ld`、`llvm-ar`）
-- 可选：`just`、Node 18+、Python 3 + wasmtime
+- Rust with the `wasm32-unknown-unknown` target
+- the LLVM wasm32 toolchain used to build aquestalk-wasm (`clang`, `wasm-ld`,
+  `llvm-ar`)
+- optional: `just`, Node 18+, Python 3 with wasmtime
 
 ```bash
 rustup target add wasm32-unknown-unknown
 
-# 1. 先生成可重定位引擎归档（相邻目录）
+# 1. Build the relocatable engine archives first (sibling checkout)
 git clone https://github.com/yukumo-group/aquestalk-wasm.git
 cd aquestalk-wasm
 ./scripts/build-reloc.sh --no-test
 
-# 2. 构建 Yukw
+# 2. Build Yukw
 cd ../Yukw
 just wasm        # target/wasm32-unknown-unknown/release/aq_wasm.wasm
 just kanji2koe   # target/wasm32-unknown-unknown/release/kanji2koe.wasm
 ```
 
-没有 `just` 时：
+Without `just`:
 
 ```bash
 cargo build -p aq-wasm --target wasm32-unknown-unknown --release --lib
 cargo build -p kanji2koe --target wasm32-unknown-unknown --release --lib
 ```
 
-如果两个仓库不是相邻目录：
+If the two repositories are not siblings:
 
 ```bash
 AQTK_RELOC_DIR=/path/to/aquestalk-wasm/dist/reloc \
   cargo build -p aq-wasm --target wasm32-unknown-unknown --release --lib
 ```
 
-host 侧检查：`just check` 或 `cargo check --workspace`。
+Host-side check: `just check` or `cargo check --workspace`.
 
 ## ABI
 
@@ -152,20 +164,23 @@ int aq_synthesize(uint32_t text, uint32_t text_len, uint32_t param,
 void aq_free(uint32_t ptr);
 ```
 
-`param` 是 44 字节、11 个 `i32`：
+`param` is 44 bytes: 11 `i32` fields:
 
 ```
 version, preset, speed, phont, phont_data, base, volume, pitch, accent, lmd, fsc
 ```
 
-- `version`：`1`（AquesTalk1）、`2`（AquesTalk2）、`10`（AquesTalk10）
-- V1：`preset` 0–8，依次为 f1/f2/f3/m1/m2/r1/dvd/imd1/jgr
-- V2：使用 `phont_data`（+ `phont_len`）；`phont` 路径不再读取
-- V10：`preset` 1–7 使用内置预设，0 使用 `base…fsc` 自定义
-- 成功返回 0，并写出 WAV 指针/长度；失败返回负数，WAV 由 `aq_free` 释放
+- `version`: `1` (AquesTalk1), `2` (AquesTalk2), or `10` (AquesTalk10)
+- V1: `preset` 0-8 selects f1/f2/f3/m1/m2/r1/dvd/imd1/jgr
+- V2: uses `phont_data` (+ `phont_len`); the `phont` path is no longer read
+- V10: `preset` 1-7 selects a built-in preset; 0 uses the custom `base...fsc`
+  fields
+- Returns 0 and writes the WAV pointer/length on success; returns a negative
+  code on failure. Release the WAV with `aq_free`.
 
-模块还导出 `malloc/free`、`aq_has_function`、`aq_error_message`、
-`aq_static_engines`（返回链接的引擎数 5），以及五个引擎的直通 API。
+The module also exports `malloc/free`, `aq_has_function`, `aq_error_message`,
+`aq_static_engines` (the number of linked engines, 5), and the direct APIs of
+all five engines.
 
 ### `kanji2koe`
 
@@ -178,49 +193,57 @@ int aqk_convert(int32_t script, uint32_t text, uint32_t text_len,
 void aqk_free(uint32_t ptr);
 ```
 
-`script = 1` 表示日语。必须先 `aqk_load`，再 `aqk_convert`。`malloc/free`
-同样导出，宿主用它放词典和输入文本。
+`script = 1` means Japanese. Call `aqk_load` before `aqk_convert`. `malloc/free`
+are exported as well; the host uses them for dictionary and input buffers.
 
-## 示例
+## Examples
 
 ```bash
-# 构建并复制模块
+# Build and copy the module
 just wasm
 cp target/wasm32-unknown-unknown/release/aq_wasm.wasm examples/yukw.wasm
 
-# Python + wasmtime：生成 aq1/aq2/aq10 三个 WAV
+# Python + wasmtime: writes aq1/aq2/aq10 WAVs
 cd examples
-./.venv/bin/python main.py          # 或 uv run main.py
+./.venv/bin/python main.py          # or: uv run main.py
 ```
 
-`examples/bench.mjs` 是可选基准，会同时测统一模块、`vendor/` 中的旧模块和
-`aqtk-shim`；统一模块路径为 `target/dist/yukw.wasm` 或仓库根目录的
-`yukw.wasm`。
+`examples/bench.mjs` is an optional benchmark that measures the unified module,
+the old modules in `vendor/`, and `aqtk-shim`; the unified module is looked up at
+`target/dist/yukw.wasm` or `yukw.wasm` in the repository root.
 
-## 测试
+## Testing
 
 ```bash
 cargo test --workspace
 ```
 
-- `aq-wasm` 和 `kanji2koe` 的 wasm 测试会真正构建 wasm32 模块，并检查
-  **0 imports / 单 memory**。
-- 缺少引擎归档时测试会跳过；可用 `AQTK_RELOC_DIR` 指定。
-- `kanji2koe` 的转换测试还需要词典；可用 `AQK2K_DIC_DIR` 指定，否则跳过。
+- The wasm tests in `aq-wasm` and `kanji2koe` build the wasm32 module and check
+  **0 imports / one memory**.
+- Tests are skipped when the engine archives are missing; set `AQTK_RELOC_DIR`
+  to provide them.
+- The `kanji2koe` conversion test also needs dictionaries; set `AQK2K_DIC_DIR`
+  or it is skipped.
 
-## 已知限制
+## Known limitations
 
-- AquesTalk1、AquesTalk10、AqKanji2Koe 是评价版：ナ行/マ行会映射为ヌ。
-- 静态模块没有文件系统，AquesTalk2 只能通过 `phont_data` 切换 phont。
-- `kanji2koe` 的词典在运行时加载，模块本身不再内嵌 9 MB 词典。
-- `character`、`script` 仍是占位 crate。
-- 旧的多 memory / embind 合并路径已经删除；`vendor/` 只用于基准对比。
-- 不提供 aqtk-shim 的 `AqShim_Init`/`.env` 许可证加载；wasm 参数块只保留
-  `version…fsc` 这 11 个核心字段，`DevKey`/`UserKey` 暂未包含。当前链接的是
-  评价版引擎，需要产品行为请使用带许可证的构建。
+- AquesTalk1, AquesTalk10, and AqKanji2Koe are evaluation builds: the ナ row and
+  the マ row map to ヌ.
+- The static module has no filesystem, so AquesTalk2 can only switch phonts
+  through `phont_data`.
+- `kanji2koe` loads its dictionaries at runtime; the module no longer embeds the
+  9 MB dictionary.
+- `character` and `script` are still placeholder crates.
+- The old multi-memory/embind merge path has been removed; `vendor/` is only
+  used for benchmarks.
+- There is no aqtk-shim `AqShim_Init`/`.env` license loading. The wasm parameter
+  block keeps only the 11 core fields `version...fsc` and does not include
+  `DevKey`/`UserKey` yet. The current engines are evaluation builds; use a
+  licensed build for production behavior.
 
-## 许可
+## License
 
-AquesTalk 及其语音库、phont、词典是株式会社アクエスト（AQUEST Corp.）的商用
-软件。本仓库的代码仅用于互操作性研究，不授予 AquesTalk 数据的使用、分发或
-商业运行许可；需要产品行为请向 AQUEST 获取相应许可证。
+AquesTalk and its voice libraries, phonts, and dictionaries are commercial
+software from AQUEST Corp. The code in this repository is for interoperability
+research only and does not grant any right to use, distribute, or commercially
+run AquesTalk data. Obtain a license from AQUEST for production behavior.
