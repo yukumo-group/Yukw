@@ -97,8 +97,8 @@ rust-lld 直接链接进 Rust 模块：
   仓库里**。宿主在运行时写入 wasm 内存并调用 `aqk_load`；`kanji2koe` 的测试用
   `AQK2K_DIC_DIR` 指向词典目录（或相邻 aquestalk-wasm 的
   `engines/aqk2k/aqk2k_lnx/aq_dic`）。
-- AquesTalk2 的 phont 以 `phont_data` 指针传入；静态模块没有文件系统，
-  `AqSynthParam::phont` 路径字段不再被读取。
+- AquesTalk2 的 phont 文件编译进 `libaq2.a`。调用用 `preset` 选择，或通过
+  `phont_data` 传入自定义字节。没有 phont 路径。
 
 ### 3. 可选的本地 `vendor/`（gitignored）
 
@@ -154,15 +154,16 @@ int aq_synthesize(uint32_t text, uint32_t text_len, uint32_t param,
 void aq_free(uint32_t ptr);
 ```
 
-`param` 是 44 字节、11 个 `i32`：
+`param` 是 40 字节、10 个 `i32`：
 
 ```
-version, preset, speed, phont, phont_data, base, volume, pitch, accent, lmd, fsc
+version, preset, speed, phont_data, base, volume, pitch, accent, lmd, fsc
 ```
 
 - `version`：`1`（AquesTalk1）、`2`（AquesTalk2）、`10`（AquesTalk10）
 - V1：`preset` 0–8，依次为 f1/f2/f3/m1/m2/r1/dvd/imd1/jgr
-- V2：使用 `phont_data`（+ `phont_len`）；`phont` 路径不再读取
+- V2：`preset` 0–16 选择内嵌 phont（`aq_yukkuri` 到 `ar_rm3`，然后是
+  `aq_momo1`）。非空 `phont_data`（+ `phont_len`）覆盖 `preset`
 - V10：`preset` 1–7 使用内置预设，0 使用 `base…fsc` 自定义
 - 成功返回 0，并写出 WAV 指针/长度；失败返回负数，WAV 由 `aq_free` 释放
 
@@ -190,7 +191,7 @@ void aqk_free(uint32_t ptr);
 just wasm
 cp target/wasm32-unknown-unknown/release/aq_wasm.wasm examples/yukw.wasm
 
-# Python + wasmtime：生成 aq1/aq2/aq10 三个 WAV
+# Python + wasmtime：每个 aq1 预设、aq2 phont、aq10 基本素片各生成一个 WAV
 cd examples
 ./.venv/bin/python main.py          # 或 uv run main.py
 ```
@@ -213,12 +214,12 @@ cargo test --workspace
 ## 已知限制
 
 - AquesTalk1、AquesTalk10、AqKanji2Koe 是评价版：ナ行/マ行会映射为ヌ。
-- 静态模块没有文件系统，AquesTalk2 只能通过 `phont_data` 切换 phont。
+- AquesTalk2 的预设 phont 编译在模块里。不在预设里的 phont 通过 `phont_data` 传入。
 - `kanji2koe` 的词典在运行时加载，模块本身不再内嵌 9 MB 词典。
 - `character`、`script` 仍是占位 crate。
 - 旧的多 memory / embind 合并路径已经删除；`vendor/` 只用于基准对比。
-- 不提供 aqtk-shim 的 `AqShim_Init`/`.env` 许可证加载；wasm 参数块只保留
-  `version…fsc` 这 11 个核心字段，`DevKey`/`UserKey` 暂未包含。当前链接的是
+- 不提供 aqtk-shim 的 `AqShim_Init`/`.env` 许可证加载。wasm 参数块是
+  `version` 到 `fsc` 这 10 个字段，不包含 `DevKey`/`UserKey`。当前链接的是
   评价版引擎，需要产品行为请使用带许可证的构建。
 
 ## 许可

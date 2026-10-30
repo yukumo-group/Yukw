@@ -18,7 +18,8 @@ fn preset_zero_and_counts_match_the_header() {
     assert_eq!(Aq1Preset::F1 as i32, 0);
     assert_eq!(Aq1Preset::Jgr as i32, AQ1_PRESET_COUNT - 1);
     assert_eq!(Aq2Preset::AqYukkuri as i32, 0);
-    assert_eq!(Aq2Preset::ArRm3 as i32, AQ2_PRESET_COUNT - 1);
+    assert_eq!(Aq2Preset::ArRm3 as i32, 15);
+    assert_eq!(Aq2Preset::AqMomo1 as i32, AQ2_PRESET_COUNT - 1);
     assert_eq!(Aq10Preset::Custom as i32, 0);
     assert_eq!(Aq10Preset::R2 as i32, AQ10_PRESET_COUNT - 1);
     assert_eq!(AQ1_VOICES.len(), AQ1_PRESET_COUNT as usize);
@@ -39,6 +40,10 @@ fn voice_names_follow_preset_order() {
     assert_eq!(
         aq2_phont_name(Aq2Preset::ArRm3 as i32),
         Some("ar_rm3.phont")
+    );
+    assert_eq!(
+        aq2_phont_name(Aq2Preset::AqMomo1 as i32),
+        Some("aq_momo1.phont")
     );
     assert_eq!(aq2_phont_name(-1), None);
 }

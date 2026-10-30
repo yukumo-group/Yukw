@@ -39,8 +39,9 @@ pub enum Aq1Preset {
 
 pub const AQ1_PRESET_COUNT: i32 = 9;
 
-/// AquesTalk2 phont files. 0 is [`Aq2Preset::AqYukkuri`].
-/// A non-empty phont path overrides this preset. `phont_data` overrides both.
+/// AquesTalk2 phonts compiled into the engine. 0 is [`Aq2Preset::AqYukkuri`].
+/// Values through [`Aq2Preset::ArRm3`] match `Aqsh.h`. [`Aq2Preset::AqMomo1`]
+/// is the remaining SDK phont. [`AqSynthParam::phont_data`] overrides this preset.
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Aq2Preset {
@@ -60,9 +61,10 @@ pub enum Aq2Preset {
     ArM5,
     ArMf2,
     ArRm3,
+    AqMomo1,
 }
 
-pub const AQ2_PRESET_COUNT: i32 = 16;
+pub const AQ2_PRESET_COUNT: i32 = 17;
 
 /// AquesTalk10 `gVoice_*` presets. 0 uses base/speed/volume/pitch/accent/lmd/fsc.
 #[repr(i32)]
@@ -80,13 +82,14 @@ pub enum Aq10Preset {
 
 pub const AQ10_PRESET_COUNT: i32 = 8;
 
-/// Parameters for one synthesis call. Fields follow `AqSynthParam` in `Aqsh.h`.
+/// Parameters for one synthesis call.
+/// Numeric fields follow `AqSynthParam` in `Aqsh.h`.
+/// AquesTalk2 uses `preset` or, when set, `phont_data`. There is no phont path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AqSynthParam {
     pub version: AqVersion,
     pub preset: i32,
     pub speed: i32,
-    pub phont: Option<String>,
     pub phont_data: Option<Vec<u8>>,
     pub base: i32,
     pub volume: i32,
@@ -103,7 +106,6 @@ impl AqSynthParam {
             version,
             preset: 0,
             speed: 0,
-            phont: None,
             phont_data: None,
             base: 0,
             volume: 0,

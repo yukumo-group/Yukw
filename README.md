@@ -105,8 +105,9 @@ Rust side, [host_alloc.rs](crates/aq-wasm/src/host_alloc.rs) provides C
   runtime and calls `aqk_load`; the `kanji2koe` tests use `AQK2K_DIC_DIR` to
   point at the dictionary directory (or at
   `engines/aqk2k/aqk2k_lnx/aq_dic` in a sibling aquestalk-wasm checkout).
-- AquesTalk2 phonts are passed as a `phont_data` pointer. The static module has
-  no filesystem, so the `AqSynthParam::phont` path field is no longer read.
+- AquesTalk2's phont files are compiled into `libaq2.a`. A call selects one
+  with `preset`, or passes custom bytes through `phont_data`. There is no
+  phont path.
 
 ### 3. Optional local `vendor/` (gitignored)
 
@@ -164,15 +165,16 @@ int aq_synthesize(uint32_t text, uint32_t text_len, uint32_t param,
 void aq_free(uint32_t ptr);
 ```
 
-`param` is 44 bytes: 11 `i32` fields:
+`param` is 40 bytes: 10 `i32` fields:
 
 ```
-version, preset, speed, phont, phont_data, base, volume, pitch, accent, lmd, fsc
+version, preset, speed, phont_data, base, volume, pitch, accent, lmd, fsc
 ```
 
 - `version`: `1` (AquesTalk1), `2` (AquesTalk2), or `10` (AquesTalk10)
 - V1: `preset` 0-8 selects f1/f2/f3/m1/m2/r1/dvd/imd1/jgr
-- V2: uses `phont_data` (+ `phont_len`); the `phont` path is no longer read
+- V2: `preset` 0-16 selects an inlined phont (`aq_yukkuri` through `ar_rm3`,
+  then `aq_momo1`). A non-null `phont_data` (+ `phont_len`) overrides `preset`
 - V10: `preset` 1-7 selects a built-in preset; 0 uses the custom `base...fsc`
   fields
 - Returns 0 and writes the WAV pointer/length on success; returns a negative
@@ -203,7 +205,7 @@ are exported as well; the host uses them for dictionary and input buffers.
 just wasm
 cp target/wasm32-unknown-unknown/release/aq_wasm.wasm examples/yukw.wasm
 
-# Python + wasmtime: writes aq1/aq2/aq10 WAVs
+# Python + wasmtime: one WAV per aq1 preset, aq2 phont, and aq10 base
 cd examples
 ./.venv/bin/python main.py          # or: uv run main.py
 ```
@@ -229,8 +231,8 @@ cargo test --workspace
 
 - AquesTalk1, AquesTalk10, and AqKanji2Koe are evaluation builds: the ナ row and
   the マ row map to ヌ.
-- The static module has no filesystem, so AquesTalk2 can only switch phonts
-  through `phont_data`.
+- AquesTalk2 preset phonts are compiled into the module. A phont that is not
+  one of those presets is passed as `phont_data`.
 - `kanji2koe` loads its dictionaries at runtime; the module no longer embeds the
   9 MB dictionary.
 - `character` and `script` are still placeholder crates.
@@ -238,7 +240,8 @@ cargo test --workspace
   used for benchmarks.
 - There is no aqtk-shim `AqShim_Init`/`.env` license loading. The wasm parameter
   block keeps only the 11 core fields `version...fsc` and does not include
-  `DevKey`/`UserKey` yet. The current engines are evaluation builds; use a
+  `DevKey`/`UserKey` yet. The wasm parameter block is the 10 fields
+  `version` through `fsc`. The current engines are evaluation builds; use a
   licensed build for production behavior.
 
 ## License

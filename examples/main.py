@@ -1,4 +1,4 @@
-"""Synthesize one default sentence with aq1, aq2, and aq10."""
+"""Synthesize one sentence for every aq1 preset, aq2 phont, and aq10 base."""
 
 import struct
 import sys
@@ -6,9 +6,31 @@ from pathlib import Path
 
 from wasmtime import Engine, Instance, Module, Store
 
-TEXT = "ゆっくりしていってね"
-VOICES = (("aq1", 1, 0, None), ("aq2", 2, 0, None), ("aq10", 10, 1, None))
-TEXT_AT, PARAM_AT, PHONT_AT, OUT_PTR, OUT_LEN = 65_536, 66_000, 66_100, 90_000, 90_004
+TEXT = "きょうはあさからてんきがよくて、そらにはうすぐもがうかんでいました。まどをあけると、とおくのやまからふいてくるかぜがへやのなかにはいってきて、つくえのうえのノートがかるくゆれました。よるになったら、えきまえでともだちとあつまって、あたらしいみせのケーキをたべにいくやくそくをしています。"
+# Same order as synth::AQ1_VOICES and synth::AQ2_PHONTS.
+AQ1 = ("f1", "f2", "f3", "m1", "m2", "r1", "dvd", "imd1", "jgr")
+AQ2 = (
+    "aq_yukkuri",
+    "aq_defo1",
+    "aq_f1c",
+    "aq_f3a",
+    "aq_huskey",
+    "aq_m4b",
+    "aq_mf1",
+    "aq_rb2",
+    "aq_rb3",
+    "aq_rm",
+    "aq_robo",
+    "aq_teto1",
+    "ar_f4",
+    "ar_m5",
+    "ar_mf2",
+    "ar_rm3",
+    "aq_momo1",
+)
+# AquesTalk10 基本素片 F1E/F2E/M1E. Preset 0 reads base and the prosody fields.
+AQ10_BASES = (("f1e", 0), ("f2e", 1), ("m1e", 2))
+TEXT_AT, PARAM_AT, OUT_PTR, OUT_LEN = 65_536, 66_000, 90_000, 90_004
 
 
 def main() -> None:
@@ -24,13 +46,25 @@ def main() -> None:
 
     text = TEXT.encode()
     memory.write(store, text, TEXT_AT)
-    for name, version, preset, phont in VOICES:
-        phont_ptr = 0
-        if phont:
-            memory.write(store, phont.encode() + b"\0", PHONT_AT)
-            phont_ptr = PHONT_AT
-        # version, preset, speed, phont, phont_data, base, volume, pitch, accent, lmd, fsc
-        memory.write(store, struct.pack("<11I", version, preset, 100, phont_ptr, 0, 0, 0, 0, 0, 0, 0), PARAM_AT)
+
+    def write_wav(name: str, version: int, preset: int, base: int = 0) -> None:
+        # version, preset, speed, phont_data, base, volume, pitch, accent, lmd, fsc
+        # aq10 custom leaves preset at 0 and fills the prosody fields.
+        prosody = 100 if version == 10 else 0
+        param = struct.pack(
+            "<10i",
+            version,
+            preset,
+            100,
+            0,
+            base,
+            prosody,
+            prosody,
+            prosody,
+            prosody,
+            prosody,
+        )
+        memory.write(store, param, PARAM_AT)
         code = synthesize(store, TEXT_AT, len(text), PARAM_AT, 0, OUT_PTR, OUT_LEN)
         if code:
             raise RuntimeError(f"{name}: aq_synthesize returned {code}")
@@ -44,6 +78,13 @@ def main() -> None:
         path = out_dir / f"{name}.wav"
         path.write_bytes(wav)
         print(f"{path} ({len(wav)} bytes)")
+
+    for preset, name in enumerate(AQ1):
+        write_wav(f"aq1-{name}", 1, preset)
+    for preset, name in enumerate(AQ2):
+        write_wav(f"aq2-{name}", 2, preset)
+    for name, base in AQ10_BASES:
+        write_wav(f"aq10-{name}", 10, 0, base)
 
 
 if __name__ == "__main__":

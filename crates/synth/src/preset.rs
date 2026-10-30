@@ -8,7 +8,7 @@ use crate::param::{
 pub const AQ1_VOICES: [&str; AQ1_PRESET_COUNT as usize] =
     ["f1", "f2", "f3", "m1", "m2", "r1", "dvd", "imd1", "jgr"];
 
-/// AquesTalk2 phont file staged in `phont/`, same order as `Aq2Preset`.
+/// AquesTalk2 phont compiled into the engine, same order as `Aq2Preset`.
 pub const AQ2_PHONTS: [&str; AQ2_PRESET_COUNT as usize] = [
     "aq_yukkuri.phont",
     "aq_defo1.phont",
@@ -26,6 +26,7 @@ pub const AQ2_PHONTS: [&str; AQ2_PRESET_COUNT as usize] = [
     "ar_m5.phont",
     "ar_mf2.phont",
     "ar_rm3.phont",
+    "aq_momo1.phont",
 ];
 
 /// One AquesTalk10 voice row: bas, spd, vol, pit, acc, lmd, fsc.

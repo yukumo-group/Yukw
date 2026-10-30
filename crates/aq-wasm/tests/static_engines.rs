@@ -68,45 +68,169 @@ fn static_engines_link_into_one_single_memory_module() {
     let synthesize = instance
         .get_typed_func::<(u32, u32, u32, u32, u32, u32), i32>(&mut store, "aq_synthesize")
         .unwrap();
+    let free = instance
+        .get_typed_func::<u32, ()>(&mut store, "aq_free")
+        .unwrap();
 
     let text = "こんにちは。".as_bytes();
     let text_at = 65_536u32;
     memory.write(&mut store, text_at as usize, text).unwrap();
 
-    for (version, preset) in [(1i32, 0i32), (1, 2), (2, 0), (10, 1), (10, 3)] {
-        let mut param = [0u8; 44];
+    let speak = |store: &mut wasmtime::Store<()>,
+                 version: i32,
+                 preset: i32,
+                 speed: i32,
+                 base: i32,
+                 volume: i32,
+                 pitch: i32,
+                 accent: i32,
+                 lmd: i32,
+                 fsc: i32,
+                 phont: &[u8]|
+     -> Result<Vec<u8>, i32> {
+        let mut param = [0u8; 40];
         param[0..4].copy_from_slice(&version.to_le_bytes());
         param[4..8].copy_from_slice(&preset.to_le_bytes());
-        param[8..12].copy_from_slice(&100i32.to_le_bytes());
+        param[8..12].copy_from_slice(&speed.to_le_bytes());
+        param[16..20].copy_from_slice(&base.to_le_bytes());
+        param[20..24].copy_from_slice(&volume.to_le_bytes());
+        param[24..28].copy_from_slice(&pitch.to_le_bytes());
+        param[28..32].copy_from_slice(&accent.to_le_bytes());
+        param[32..36].copy_from_slice(&lmd.to_le_bytes());
+        param[36..40].copy_from_slice(&fsc.to_le_bytes());
+        let phont_at = 100_000u32;
+        let phont_len = if phont.is_empty() {
+            0
+        } else {
+            memory.write(&mut *store, phont_at as usize, phont).unwrap();
+            param[12..16].copy_from_slice(&phont_at.to_le_bytes());
+            phont.len() as u32
+        };
         let param_at = 66_000u32;
-        memory.write(&mut store, param_at as usize, &param).unwrap();
-
+        memory
+            .write(&mut *store, param_at as usize, &param)
+            .unwrap();
         let out_ptr = 90_000u32;
         let out_len = 90_004u32;
         let code = synthesize
             .call(
-                &mut store,
-                (text_at, text.len() as u32, param_at, 0, out_ptr, out_len),
+                &mut *store,
+                (
+                    text_at,
+                    text.len() as u32,
+                    param_at,
+                    phont_len,
+                    out_ptr,
+                    out_len,
+                ),
             )
             .unwrap();
-        assert_eq!(
-            code, 0,
-            "aq_synthesize(version {version}, preset {preset}) -> {code}"
-        );
-
+        if code != 0 {
+            return Err(code);
+        }
         let mut fields = [0u8; 8];
         memory
-            .read(&mut store, out_ptr as usize, &mut fields[..4])
+            .read(&mut *store, out_ptr as usize, &mut fields[..4])
             .unwrap();
         memory
-            .read(&mut store, out_len as usize, &mut fields[4..])
+            .read(&mut *store, out_len as usize, &mut fields[4..])
             .unwrap();
         let ptr = u32::from_le_bytes(fields[..4].try_into().unwrap());
         let len = u32::from_le_bytes(fields[4..].try_into().unwrap());
-        assert!(len >= 4, "wav length {len}");
+        let mut bytes = vec![0u8; len as usize];
+        memory.read(&mut *store, ptr as usize, &mut bytes).unwrap();
+        free.call(&mut *store, ptr).unwrap();
+        Ok(bytes)
+    };
 
-        let mut magic = [0u8; 4];
-        memory.read(&mut store, ptr as usize, &mut magic).unwrap();
-        assert_eq!(&magic, b"RIFF", "version {version} preset {preset}");
+    let mut aq1 = Vec::new();
+    for (preset, name) in synth::AQ1_VOICES.iter().enumerate() {
+        let wav = speak(&mut store, 1, preset as i32, 100, 0, 0, 0, 0, 0, 0, &[])
+            .unwrap_or_else(|code| panic!("aq1 {name}: {code}"));
+        assert!(wav.starts_with(b"RIFF"), "aq1 {name}");
+        aq1.push((*name, wav));
+    }
+    assert_distinct(&aq1);
+
+    let mut aq2 = Vec::new();
+    for (preset, name) in synth::AQ2_PHONTS.iter().enumerate() {
+        let wav = speak(&mut store, 2, preset as i32, 100, 0, 0, 0, 0, 0, 0, &[])
+            .unwrap_or_else(|code| panic!("aq2 {name}: {code}"));
+        assert!(wav.starts_with(b"RIFF"), "aq2 {name}");
+        aq2.push((*name, wav));
+    }
+    assert_distinct(&aq2);
+    assert!(
+        speak(
+            &mut store,
+            2,
+            synth::AQ2_PRESET_COUNT,
+            100,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            &[],
+        )
+        .is_err(),
+        "an unknown aq2 preset without phont data must fail"
+    );
+
+    let phont_path =
+        workspace.join("../aquestalk-wasm/engines/aquestalk2/aqtk2-lnx/phont/aq_rm.phont");
+    if let Some((_, rm)) = aq2.iter().find(|(name, _)| *name == "aq_rm.phont") {
+        if phont_path.exists() {
+            let file = std::fs::read(&phont_path).unwrap();
+            let custom = speak(
+                &mut store,
+                2,
+                synth::AQ2_PRESET_COUNT,
+                100,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                &file,
+            )
+            .expect("custom phont data overrides an unknown preset");
+            assert_eq!(
+                custom, *rm,
+                "aq_rm.phont must match the inlined AqRm preset"
+            );
+        }
+    }
+
+    // AquesTalk10 bases are the three 基本素片: F1E, F2E, M1E.
+    let mut aq10 = Vec::new();
+    for (base, name) in [(0, "f1e"), (1, "f2e"), (2, "m1e")] {
+        let wav = speak(
+            &mut store,
+            10,
+            synth::Aq10Preset::Custom as i32,
+            100,
+            base,
+            100,
+            100,
+            100,
+            100,
+            100,
+            &[],
+        )
+        .unwrap_or_else(|code| panic!("aq10 {name}: {code}"));
+        assert!(wav.starts_with(b"RIFF"), "aq10 {name}");
+        aq10.push((name, wav));
+    }
+    assert_distinct(&aq10);
+}
+
+fn assert_distinct(wavs: &[(&str, Vec<u8>)]) {
+    for (index, (name, wav)) in wavs.iter().enumerate() {
+        for (other, other_wav) in wavs.iter().take(index) {
+            assert_ne!(wav, other_wav, "{name} produced the same wav as {other}");
+        }
     }
 }

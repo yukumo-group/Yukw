@@ -12,18 +12,19 @@
 use std::cell::Cell;
 
 use synth::{
-    AQ1_VOICES, AqSynthParam, AqVersion, ERR_ARG, ERR_OPEN, ERR_VERSION, aq10_voice, error_message,
+    AQ1_VOICES, AQ2_PRESET_COUNT, AqSynthParam, AqVersion, ERR_ARG, ERR_OPEN, ERR_VERSION,
+    aq10_voice, error_message,
 };
 
 #[path = "host_alloc.rs"]
 mod host_alloc;
 
+/// 40 bytes. AquesTalk2 uses `preset` or `phont_data`; there is no phont path.
 #[repr(C)]
 struct ParamAbi {
     version: i32,
     preset: i32,
     speed: i32,
-    phont: u32,
     phont_data: u32,
     base: i32,
     volume: i32,
@@ -40,6 +41,7 @@ unsafe extern "C" {
 
     fn aq2_synthe_utf8(text: *const u8, speed: i32, size: *mut i32, phont: *const u8) -> *mut u8;
     fn aq2_free_wave(wave: *mut u8);
+    fn aq2_builtin_phont(preset: i32, size: *mut u32) -> *const u8;
 
     fn aq10_synthe_utf8_default(
         text: *const u8,
@@ -69,20 +71,6 @@ fn read_text(pointer: u32, len: u32) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-fn read_cstr(pointer: u32) -> Option<String> {
-    if pointer == 0 {
-        return None;
-    }
-    let mut len = 0usize;
-    unsafe {
-        while *(pointer as *const u8).add(len) != 0 && len < 1_048_576 {
-            len += 1;
-        }
-        let bytes = std::slice::from_raw_parts(pointer as *const u8, len);
-        Some(String::from_utf8_lossy(bytes).into_owned())
-    }
-}
-
 fn read_param(pointer: u32, phont_len: u32) -> Option<AqSynthParam> {
     if pointer == 0 {
         return None;
@@ -98,7 +86,6 @@ fn read_param(pointer: u32, phont_len: u32) -> Option<AqSynthParam> {
     param.accent = raw.accent;
     param.lmd = raw.lmd;
     param.fsc = raw.fsc;
-    param.phont = read_cstr(raw.phont).filter(|text| !text.is_empty());
     if raw.phont_data != 0 && phont_len > 0 {
         let bytes =
             unsafe { std::slice::from_raw_parts(raw.phont_data as *const u8, phont_len as usize) };
@@ -146,11 +133,20 @@ fn synthesize(param: &AqSynthParam, text: &str) -> Result<Vec<u8>, i32> {
                 aq1_synthe_utf8(ctext.as_ptr(), param.speed, &mut size)
             }
             AqVersion::V2 => {
-                let phont = param
+                let phont = if let Some(bytes) = param
                     .phont_data
                     .as_deref()
                     .filter(|bytes| !bytes.is_empty())
-                    .map_or(std::ptr::null(), |bytes| bytes.as_ptr());
+                {
+                    bytes.as_ptr()
+                } else {
+                    let mut len = 0u32;
+                    let pointer = aq2_builtin_phont(param.preset, &mut len);
+                    if pointer.is_null() || len == 0 {
+                        return Err(ERR_OPEN);
+                    }
+                    pointer
+                };
                 aq2_synthe_utf8(ctext.as_ptr(), param.speed, &mut size, phont)
             }
             AqVersion::V10 => {
@@ -185,7 +181,8 @@ fn synthesize(param: &AqSynthParam, text: &str) -> Result<Vec<u8>, i32> {
 }
 
 /// Synthesize UTF-8 `text`. `param` points at [`ParamAbi`] in memory 0.
-/// `phont_len` is the size of `phont_data` because the C struct has no length.
+/// `phont_len` is the size of `phont_data` when that pointer is set.
+/// An empty `phont_data` selects the inlined AquesTalk2 phont for `preset`.
 /// On success returns 0 and writes the wav pointer and size. Otherwise, a negative code.
 #[unsafe(no_mangle)]
 pub extern "C" fn aq_synthesize(
@@ -253,7 +250,7 @@ pub extern "C" fn aq_has_function(version: i32, preset: i32, name: u32, name_len
     };
     let valid = match version {
         AqVersion::V1 => (0..AQ1_VOICES.len() as i32).contains(&preset),
-        AqVersion::V2 => true,
+        AqVersion::V2 => (0..AQ2_PRESET_COUNT).contains(&preset),
         AqVersion::V10 => (0..synth::AQ10_PRESET_COUNT).contains(&preset),
     };
     if !valid {
