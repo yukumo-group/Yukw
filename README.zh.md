@@ -56,7 +56,7 @@ Yukw/
 │   ├── koe/          # ToKoe trait
 │   ├── character/    # 占位 crate（目前只有示例 add）
 │   └── script/       # 占位 crate（目前只有示例 add）
-├── examples/         # Python/wasmtime 示例与可选基准
+├── examples/         # Python/wasmtime 示例
 ├── justfile
 └── Cargo.toml
 ```
@@ -102,9 +102,8 @@ rust-lld 直接链接进 Rust 模块：
 
 ### 3. 可选的本地 `vendor/`（gitignored）
 
-`vendor/` 里是旧的 Emscripten 构建的 wasm 模块，**运行时不再使用**，仅
-`examples/bench.mjs` 用来做对比基准。它不是 submodule，不参与构建，也不需要
-提交。
+`vendor/` 里是旧的 Emscripten 构建的 wasm 模块，运行时不使用。它不是
+submodule，不参与构建，也不需要提交。
 
 ## 构建
 
@@ -196,10 +195,6 @@ cd examples
 ./.venv/bin/python main.py          # 或 uv run main.py
 ```
 
-`examples/bench.mjs` 是可选基准，会同时测统一模块、`vendor/` 中的旧模块和
-`aqtk-shim`；统一模块路径为 `target/dist/yukw.wasm` 或仓库根目录的
-`yukw.wasm`。
-
 ## 测试
 
 ```bash
@@ -217,7 +212,7 @@ cargo test --workspace
 - AquesTalk2 的预设 phont 编译在模块里。不在预设里的 phont 通过 `phont_data` 传入。
 - `kanji2koe` 的词典在运行时加载，模块本身不再内嵌 9 MB 词典。
 - `character`、`script` 仍是占位 crate。
-- 旧的多 memory / embind 合并路径已经删除；`vendor/` 只用于基准对比。
+- 旧的多 memory / embind 合并路径已经删除。`vendor/` 不再使用。
 - 不提供 aqtk-shim 的 `AqShim_Init`/`.env` 许可证加载。wasm 参数块是
   `version` 到 `fsc` 这 10 个字段，不包含 `DevKey`/`UserKey`。当前链接的是
   评价版引擎，需要产品行为请使用带许可证的构建。

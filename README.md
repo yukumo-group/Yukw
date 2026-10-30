@@ -61,7 +61,7 @@ Yukw/
 │   ├── koe/          # ToKoe trait
 │   ├── character/    # placeholder crate (only the sample add right now)
 │   └── script/       # placeholder crate (only the sample add right now)
-├── examples/         # Python/wasmtime example and optional benchmark
+├── examples/         # Python/wasmtime example
 ├── justfile
 └── Cargo.toml
 ```
@@ -111,10 +111,9 @@ Rust side, [host_alloc.rs](crates/aq-wasm/src/host_alloc.rs) provides C
 
 ### 3. Optional local `vendor/` (gitignored)
 
-`vendor/` contains wasm modules from the old Emscripten build. The runtime **no
-longer uses them**; only `examples/bench.mjs` loads them for comparison
-benchmarks. It is not a submodule, does not participate in the build, and does
-not need to be committed.
+`vendor/` contains wasm modules from the old Emscripten build. The runtime
+does not use them. It is not a submodule, does not participate in the build,
+and does not need to be committed.
 
 ## Building
 
@@ -210,10 +209,6 @@ cd examples
 ./.venv/bin/python main.py          # or: uv run main.py
 ```
 
-`examples/bench.mjs` is an optional benchmark that measures the unified module,
-the old modules in `vendor/`, and `aqtk-shim`; the unified module is looked up at
-`target/dist/yukw.wasm` or `yukw.wasm` in the repository root.
-
 ## Testing
 
 ```bash
@@ -236,12 +231,10 @@ cargo test --workspace
 - `kanji2koe` loads its dictionaries at runtime; the module no longer embeds the
   9 MB dictionary.
 - `character` and `script` are still placeholder crates.
-- The old multi-memory/embind merge path has been removed; `vendor/` is only
-  used for benchmarks.
+- The old multi-memory/embind merge path has been removed. `vendor/` is unused.
 - There is no aqtk-shim `AqShim_Init`/`.env` license loading. The wasm parameter
-  block keeps only the 11 core fields `version...fsc` and does not include
-  `DevKey`/`UserKey` yet. The wasm parameter block is the 10 fields
-  `version` through `fsc`. The current engines are evaluation builds; use a
+  block is the 10 fields `version` through `fsc` and does not include
+  `DevKey`/`UserKey`. The current engines are evaluation builds; use a
   licensed build for production behavior.
 
 ## License
