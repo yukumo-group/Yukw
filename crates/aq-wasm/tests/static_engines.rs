@@ -225,6 +225,39 @@ fn static_engines_link_into_one_single_memory_module() {
         aq10.push((name, wav));
     }
     assert_distinct(&aq10);
+
+    // Named presets must differ too, not only the custom base field.
+    let mut aq10_presets = Vec::new();
+    for (preset, name) in [
+        (synth::Aq10Preset::F1 as i32, "f1"),
+        (synth::Aq10Preset::F2 as i32, "f2"),
+        (synth::Aq10Preset::M1 as i32, "m1"),
+    ] {
+        let wav = speak(&mut store, 10, preset, 1, 0, 0, 0, 0, 0, 0, &[])
+            .unwrap_or_else(|code| panic!("aq10 preset {name}: {code}"));
+        assert!(wav.starts_with(b"RIFF"), "aq10 preset {name}");
+        aq10_presets.push((name, wav));
+    }
+    assert_distinct(&aq10_presets);
+
+    let aq1_secs = playback_secs(&aq1[0].1);
+    let aq10_secs = playback_secs(&aq10[0].1);
+    let ratio = aq10_secs / aq1_secs;
+    assert!(
+        (0.6..=1.5).contains(&ratio),
+        "aq10 {aq10_secs:.2}s vs aq1 {aq1_secs:.2}s (ratio {ratio:.2}); speed 100 is the 50-300 scale on both"
+    );
+    assert_eq!(sample_rate(&aq10[0].1), 16_000, "aq10 fsc 100 is 16 kHz");
+}
+
+fn sample_rate(wav: &[u8]) -> u32 {
+    u32::from_le_bytes(wav[24..28].try_into().unwrap())
+}
+
+fn playback_secs(wav: &[u8]) -> f64 {
+    let rate = sample_rate(wav);
+    assert!(rate >= 8_000, "sample rate {rate}");
+    (wav.len() - 44) as f64 / (f64::from(rate) * 2.0)
 }
 
 fn assert_distinct(wavs: &[(&str, Vec<u8>)]) {
