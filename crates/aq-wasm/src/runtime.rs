@@ -16,9 +16,6 @@ use synth::{
     aq10_voice, error_message,
 };
 
-#[path = "host_alloc.rs"]
-mod host_alloc;
-
 /// 40 bytes. AquesTalk2 uses `preset` or `phont_data`; there is no phont path.
 #[repr(C)]
 struct ParamAbi {

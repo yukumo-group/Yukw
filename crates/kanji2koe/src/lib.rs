@@ -11,6 +11,10 @@ mod session;
 #[cfg(target_arch = "wasm32")]
 mod runtime;
 
+#[cfg(target_arch = "wasm32")]
+#[path = "host_alloc.rs"]
+mod host_alloc;
+
 pub use session::{
     ERR_ARG, ERR_OPEN, ERR_SCRIPT, LinkedScript, Reader, Script, Session, find_script,
 };

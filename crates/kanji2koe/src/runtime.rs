@@ -8,9 +8,6 @@ use koe::ToKoe;
 
 use crate::{ERR_SCRIPT, LinkedScript, Reader, Script, Session, find_script};
 
-#[path = "host_alloc.rs"]
-mod host_alloc;
-
 struct Shared(Session);
 // The module is single-threaded.
 unsafe impl Sync for Shared {}

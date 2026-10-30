@@ -13,64 +13,82 @@ use std::ptr;
 const HEADER: usize = 16;
 const ALIGN: usize = 16;
 
-#[inline]
-unsafe fn layout_for(total: usize) -> Layout {
-    let size = (total + (ALIGN - 1)) & !(ALIGN - 1);
-    unsafe { Layout::from_size_align_unchecked(size, ALIGN) }
+fn layout_for(total: usize) -> Option<Layout> {
+    let size = total.checked_add(ALIGN - 1)? & !(ALIGN - 1);
+    Layout::from_size_align(size, ALIGN).ok()
 }
 
-unsafe fn allocate(size: usize) -> *mut u8 {
+fn allocate(size: usize) -> *mut u8 {
     let Some(total) = size.checked_add(HEADER) else {
         return ptr::null_mut();
     };
-    let base = unsafe { alloc_zeroed(layout_for(total)) };
+    let Some(layout) = layout_for(total) else {
+        return ptr::null_mut();
+    };
+    let base = unsafe { alloc_zeroed(layout) };
     if base.is_null() {
-        return base;
+        return ptr::null_mut();
     }
-    unsafe { (base as *mut usize).write(total) };
-    unsafe { base.add(HEADER) }
+    // `layout` covers the header and the payload.
+    unsafe {
+        base.cast::<usize>().write(total);
+        base.add(HEADER)
+    }
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
-    unsafe { allocate(size.max(1)) }
+/// # Safety
+/// `payload` came from [`allocate`] and has not been freed.
+unsafe fn allocated_block(payload: *mut u8) -> (*mut u8, usize) {
+    unsafe {
+        let base = payload.sub(HEADER);
+        (base, base.cast::<usize>().read())
+    }
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn calloc(count: usize, size: usize) -> *mut u8 {
+#[cfg_attr(target_arch = "wasm32", unsafe(no_mangle))]
+pub extern "C" fn malloc(size: usize) -> *mut u8 {
+    allocate(size.max(1))
+}
+
+#[cfg_attr(target_arch = "wasm32", unsafe(no_mangle))]
+pub extern "C" fn calloc(count: usize, size: usize) -> *mut u8 {
     let Some(total) = count.checked_mul(size) else {
         return ptr::null_mut();
     };
-    unsafe { allocate(total.max(1)) }
+    allocate(total.max(1))
 }
 
-#[unsafe(no_mangle)]
+/// # Safety
+/// `pointer` is null, or a live pointer from [`malloc`], [`calloc`], or [`realloc`].
+#[cfg_attr(target_arch = "wasm32", unsafe(no_mangle))]
 pub unsafe extern "C" fn free(pointer: *mut u8) {
     if pointer.is_null() {
         return;
     }
-    let base = unsafe { pointer.sub(HEADER) };
-    let total = unsafe { (base as *mut usize).read() };
-    unsafe { dealloc(base, layout_for(total)) };
+    let (base, total) = unsafe { allocated_block(pointer) };
+    let layout = layout_for(total).expect("stored size has a valid layout");
+    unsafe { dealloc(base, layout) };
 }
 
-#[unsafe(no_mangle)]
+/// # Safety
+/// `pointer` is null, or a live pointer from [`malloc`], [`calloc`], or [`realloc`].
+#[cfg_attr(target_arch = "wasm32", unsafe(no_mangle))]
 pub unsafe extern "C" fn realloc(pointer: *mut u8, size: usize) -> *mut u8 {
     if pointer.is_null() {
-        return unsafe { malloc(size) };
+        return malloc(size);
     }
     if size == 0 {
         unsafe { free(pointer) };
         return ptr::null_mut();
     }
-    let base = unsafe { pointer.sub(HEADER) };
-    let total = unsafe { (base as *mut usize).read() };
-    let old_size = total - HEADER;
-    let new = unsafe { allocate(size) };
+    let old_size = unsafe { allocated_block(pointer) }.1 - HEADER;
+    let new = allocate(size);
     if new.is_null() {
-        return new;
+        return ptr::null_mut();
     }
+    // Both blocks are live; copy only the shared prefix.
     unsafe { ptr::copy_nonoverlapping(pointer, new, old_size.min(size)) };
     unsafe { free(pointer) };
     new
 }
+
