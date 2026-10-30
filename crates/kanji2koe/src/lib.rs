@@ -11,7 +11,8 @@ mod session;
 #[cfg(target_arch = "wasm32")]
 mod runtime;
 
-#[cfg(target_arch = "wasm32")]
+// Tests compile this too. `no_mangle` stays wasm-only so libc is left alone.
+#[cfg(any(target_arch = "wasm32", test))]
 #[path = "host_alloc.rs"]
 mod host_alloc;
 
