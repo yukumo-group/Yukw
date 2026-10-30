@@ -1,6 +1,0 @@
-[package]
-name = "embind"
-edition.workspace = true
-version.workspace = true
-
-[dependencies]

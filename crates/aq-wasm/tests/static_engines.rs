@@ -31,8 +31,6 @@ fn static_engines_link_into_one_single_memory_module() {
             "--target",
             "wasm32-unknown-unknown",
             "--lib",
-            "--features",
-            "static-engines",
             "--offline",
         ])
         .current_dir(&workspace)

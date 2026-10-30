@@ -1,22 +1,10 @@
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 fn main() {
     let target = std::env::var("TARGET").unwrap_or_default();
     if target.starts_with("wasm32") {
         println!("cargo:rustc-link-arg=--export-memory");
-        if std::env::var_os("CARGO_FEATURE_STATIC_ENGINES").is_some() {
-            link_static_engines();
-        }
-    }
-
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let env_path = root.join(".env");
-    println!("cargo:rerun-if-changed={}", env_path.display());
-    let map = load_dotenv(&env_path);
-    for key in ["M4L_FIND_B64", "M4L_REPLACE_B64"] {
-        let value = required(&map, key);
-        println!("cargo:rustc-env={key}={value}");
+        link_static_engines();
     }
 }
 
@@ -45,7 +33,7 @@ fn link_static_engines() {
         let path = dir.join(name);
         if !path.exists() {
             panic!(
-                "static-engines: {} is missing.\n\
+                "aq-wasm: {} is missing.\n\
                  Run `./scripts/build-reloc.sh` in the aquestalk-wasm checkout, or set \
                  AQTK_RELOC_DIR to the directory that contains the .a files.",
                 path.display()
@@ -56,7 +44,7 @@ fn link_static_engines() {
     let host = dir.join("libaqhost.a");
     if !host.exists() {
         panic!(
-            "static-engines: {} is missing (rebuild the link kit)",
+            "aq-wasm: {} is missing (rebuild the link kit)",
             host.display()
         );
     }
@@ -85,27 +73,4 @@ fn link_static_engines() {
             println!("cargo:rustc-link-arg=--export={name}");
         }
     }
-}
-
-fn required<'a>(map: &'a HashMap<String, String>, key: &str) -> &'a str {
-    map.get(key)
-        .map(String::as_str)
-        .unwrap_or_else(|| panic!("{key} missing from .env"))
-}
-
-fn load_dotenv(path: &Path) -> HashMap<String, String> {
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
-    let mut map = HashMap::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        map.insert(key.trim().to_string(), value.trim().to_string());
-    }
-    map
 }

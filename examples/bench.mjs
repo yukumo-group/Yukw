@@ -3,7 +3,7 @@
 //
 //   node examples/bench.mjs [--warmup 2] [--iters 10]
 //
-// Vendor modules get the same marker swap as myriad_4_link. Every sample,
+// Vendor modules get the same marker swap the old linker applied. Every sample,
 // including the native shim, is timed here with performance.now. aqtk_bench
 // only synthesizes. It is optional until the AquesTalk libraries are staged:
 //
@@ -93,7 +93,7 @@ async function benchUnified(args) {
   const { instance } = await WebAssembly.instantiate(fs.readFileSync(wasmPath));
   const cases = [
     ["aq1", { version: 1, preset: 0 }],
-    ["aq2", { version: 2, preset: 0, phont: "aq_yukkuri" }],
+    ["aq2", { version: 2, preset: 0 }],
     ["aq10", { version: 10, preset: 1 }],
   ];
   const out = [];

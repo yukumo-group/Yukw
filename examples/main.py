@@ -4,10 +4,10 @@ import struct
 import sys
 from pathlib import Path
 
-from wasmtime import Config, Engine, Instance, Module, Store
+from wasmtime import Engine, Instance, Module, Store
 
 TEXT = "ゆっくりしていってね"
-VOICES = (("aq1", 1, 0, None), ("aq2", 2, 0, "aq_yukkuri"), ("aq10", 10, 1, None))
+VOICES = (("aq1", 1, 0, None), ("aq2", 2, 0, None), ("aq10", 10, 1, None))
 TEXT_AT, PARAM_AT, PHONT_AT, OUT_PTR, OUT_LEN = 65_536, 66_000, 66_100, 90_000, 90_004
 
 
@@ -15,9 +15,8 @@ def main() -> None:
     out_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd() / "out"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    config = Config()
-    config.wasm_multi_memory = True
-    engine = Engine(config)
+    # The static-engine module has one memory and no imports.
+    engine = Engine()
     store = Store(engine)
     instance = Instance(store, Module(engine, Path("yukw.wasm").read_bytes()), [])
     exports = instance.exports(store)

@@ -27,13 +27,8 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 name = "aq-wasm"
 version = "0.1.0"
 dependencies = [
- "base64 0.23.1",
- "embind",
  "synth",
- "wasm-encoder 0.262.0",
- "wasmparser 0.262.0",
  "wasmtime",
- "wat",
 ]
 
 [[package]]
@@ -58,12 +53,6 @@ name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
-
-[[package]]
-name = "base64"
-version = "0.23.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bitflags"
@@ -394,10 +383,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
-name = "embind"
-version = "0.1.0"
-
-[[package]]
 name = "encoding_rs"
 version = "0.8.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -680,9 +665,6 @@ dependencies = [
 name = "kanji2koe"
 version = "0.1.0"
 dependencies = [
- "aq-wasm",
- "base64 0.23.1",
- "embind",
  "koe",
  "wasmtime",
 ]
@@ -1074,10 +1056,6 @@ dependencies = [
 [[package]]
 name = "synth"
 version = "0.1.0"
-dependencies = [
- "base64 0.23.1",
- "embind",
-]
 
 [[package]]
 name = "target-lexicon"
@@ -1339,10 +1317,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "974d643b125b272607e2fff8012ea14a8328acd7621e4bafa7afb32500052b1b"
 dependencies = [
  "bitflags",
- "hashbrown 0.17.1",
  "indexmap",
  "semver",
- "serde",
 ]
 
 [[package]]
@@ -1444,7 +1420,7 @@ version = "50.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "067440fa60ddd5145840e0335ffe0ab4d908a021932b6844c3ad61570abddfef"
 dependencies = [
- "base64 0.22.1",
+ "base64",
  "directories-next",
  "log",
  "postcard",

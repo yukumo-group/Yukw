@@ -1,81 +1,22 @@
-//! Wasm32 runtime. Voice code calls `host_*` with a voice id. The host calls
-//! back through `voice_*`, which the linker implements with that voice's memory.
+//! Wasm32 runtime for the statically linked AquesTalk engines.
+//!
+//! `build.rs` links the relocatable archives produced by `aquestalk-wasm`
+//! (`libaq1.a` … `libaqusr.a`) plus the host helpers into this module.  Engine
+//! calls are direct C calls: there is no embind host, no `voice_*` import, no
+//! per-voice memory and no multi-memory module.
+//!
+//! Only synthesis (AquesTalk1/2/10) is driven from here.  AqKanji2Koe and
+//! AqUsrDic are linked and exported as `aqk2k_*` / `aqusr_*` for the host to
+//! call directly.
 
 use std::cell::Cell;
-use std::sync::OnceLock;
 
-use embind::VoiceIo;
 use synth::{
-    AqSynthParam, AqVersion, ERR_OPEN, ERR_VERSION, LinkedVoice, Session, error_message, find_voice,
+    AQ1_VOICES, AqSynthParam, AqVersion, ERR_ARG, ERR_OPEN, ERR_VERSION, aq10_voice, error_message,
 };
 
-#[link(wasm_import_module = "voice")]
-unsafe extern "C" {
-    fn voice_read(voice: i32, addr: i32, ptr: i32, len: i32);
-    fn voice_write(voice: i32, addr: i32, ptr: i32, len: i32);
-    fn voice_grow(voice: i32, pages: i32) -> i32;
-    fn voice_call(voice: i32, func: i32, argc: i32, argv: i32) -> i64;
-    fn voice_init(voice: i32);
-    fn voice_malloc(voice: i32, size: i32) -> i32;
-    fn voice_free(voice: i32, ptr: i32);
-    fn voice_info(voice: i32) -> i64;
-    fn voice_count() -> i32;
-    fn voice_pages(voice: i32) -> i32;
-}
-
-struct Shared(Session);
-// The module is single-threaded. Embind uses a `RefCell` for host reentry.
-unsafe impl Sync for Shared {}
-
-static SESSION: OnceLock<Shared> = OnceLock::new();
-
-struct SyncCell<T>(Cell<T>);
-unsafe impl<T> Sync for SyncCell<T> {}
-
-static THREW: SyncCell<bool> = SyncCell(Cell::new(false));
-
-fn session() -> &'static Session {
-    &SESSION.get_or_init(|| Shared(Session::new())).0
-}
-
-include!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../embind/src/voice_io.rs"
-));
-
-fn linked_voices() -> &'static [LinkedVoice] {
-    static VOICES: OnceLock<Vec<LinkedVoice>> = OnceLock::new();
-    VOICES.get_or_init(|| {
-        let count = unsafe { voice_count() }.max(0);
-        (0..count)
-            .map(|index| {
-                let packed = unsafe { voice_info(index) } as u64;
-                let version = AqVersion::from_i32((packed >> 32) as i32).unwrap_or(AqVersion::V1);
-                let preset = packed as u32 as i32;
-                LinkedVoice {
-                    version,
-                    aq1_preset: (version == AqVersion::V1).then_some(preset),
-                }
-            })
-            .collect()
-    })
-}
-
-fn ensure_init(voice: u32) {
-    if session().embind.is_inited(voice) {
-        return;
-    }
-    Io.init(voice);
-    session().embind.flush_with(voice, &mut Io);
-    session().embind.mark_inited(voice);
-}
-
-fn note_throw() {
-    THREW.0.set(true);
-    session().embind.cxa_throw(0, 0, 0, 0);
-}
-
-embind::export_host!(session, note_throw, Io);
+#[path = "host_alloc.rs"]
+mod host_alloc;
 
 #[repr(C)]
 struct ParamAbi {
@@ -92,33 +33,61 @@ struct ParamAbi {
     fsc: i32,
 }
 
-fn read_text(ptr: u32, len: u32) -> String {
-    if len == 0 || ptr == 0 {
+unsafe extern "C" {
+    fn aq1_select_voice(name: *const u8) -> i32;
+    fn aq1_synthe_utf8(text: *const u8, speed: i32, size: *mut i32) -> *mut u8;
+    fn aq1_free_wave(wave: *mut u8);
+
+    fn aq2_synthe_utf8(text: *const u8, speed: i32, size: *mut i32, phont: *const u8) -> *mut u8;
+    fn aq2_free_wave(wave: *mut u8);
+
+    fn aq10_synthe_utf8_default(
+        text: *const u8,
+        base: i32,
+        speed: i32,
+        volume: i32,
+        pitch: i32,
+        accent: i32,
+        lmd: i32,
+        fsc: i32,
+        size: *mut i32,
+    ) -> *mut u8;
+    fn aq10_free_wave(wave: *mut u8);
+}
+
+struct SyncCell<T>(Cell<T>);
+unsafe impl<T> Sync for SyncCell<T> {}
+
+static WAVS: SyncCell<Vec<(u32, Vec<u8>)>> = SyncCell(Cell::new(Vec::new()));
+static ERR_BUF: SyncCell<[u8; 256]> = SyncCell(Cell::new([0; 256]));
+
+fn read_text(pointer: u32, len: u32) -> String {
+    if len == 0 || pointer == 0 {
         return String::new();
     }
-    let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+    let bytes = unsafe { std::slice::from_raw_parts(pointer as *const u8, len as usize) };
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-fn read_cstr(ptr: u32) -> Option<String> {
-    if ptr == 0 {
+fn read_cstr(pointer: u32) -> Option<String> {
+    if pointer == 0 {
         return None;
     }
     let mut len = 0usize;
     unsafe {
-        while *(ptr as *const u8).add(len) != 0 && len < 1_048_576 {
+        while *(pointer as *const u8).add(len) != 0 && len < 1_048_576 {
             len += 1;
         }
-        let bytes = std::slice::from_raw_parts(ptr as *const u8, len);
+        let bytes = std::slice::from_raw_parts(pointer as *const u8, len);
         Some(String::from_utf8_lossy(bytes).into_owned())
     }
 }
 
-fn read_param(ptr: u32, phont_len: u32) -> Option<AqSynthParam> {
-    if ptr == 0 {
+fn read_param(pointer: u32, phont_len: u32) -> Option<AqSynthParam> {
+    if pointer == 0 {
         return None;
     }
-    let raw = unsafe { &*(ptr as *const ParamAbi) };
+    let raw = unsafe { &*(pointer as *const ParamAbi) };
     let version = AqVersion::from_i32(raw.version)?;
     let mut param = AqSynthParam::new(version);
     param.preset = raw.preset;
@@ -138,22 +107,81 @@ fn read_param(ptr: u32, phont_len: u32) -> Option<AqSynthParam> {
     Some(param)
 }
 
-static WAVS: SyncCell<Vec<(u32, Vec<u8>)>> = SyncCell(Cell::new(Vec::new()));
-
 fn store_wav(bytes: Vec<u8>) -> (u32, u32) {
     let mut bytes = bytes;
-    let ptr = bytes.as_mut_ptr() as u32;
+    let pointer = bytes.as_mut_ptr() as u32;
     let len = bytes.len() as u32;
     let mut wavs = WAVS.0.take();
-    wavs.push((ptr, bytes));
+    wavs.push((pointer, bytes));
     WAVS.0.set(wavs);
-    (ptr, len)
+    (pointer, len)
 }
 
-fn write_u32(ptr: u32, value: u32) {
-    if ptr != 0 {
-        unsafe { *(ptr as *mut u32) = value }
+fn write_u32(pointer: u32, value: u32) {
+    if pointer != 0 {
+        unsafe { *(pointer as *mut u32) = value }
     }
+}
+
+fn synthesize(param: &AqSynthParam, text: &str) -> Result<Vec<u8>, i32> {
+    if text.is_empty() {
+        return Err(ERR_ARG);
+    }
+    let mut ctext = text.as_bytes().to_vec();
+    ctext.push(0);
+    let mut size: i32 = 0;
+
+    let pointer = unsafe {
+        match param.version {
+            AqVersion::V1 => {
+                let index = param.preset;
+                if !(0..AQ1_VOICES.len() as i32).contains(&index) {
+                    return Err(ERR_OPEN);
+                }
+                let mut name = AQ1_VOICES[index as usize].as_bytes().to_vec();
+                name.push(0);
+                if aq1_select_voice(name.as_ptr()) != 0 {
+                    return Err(ERR_OPEN);
+                }
+                aq1_synthe_utf8(ctext.as_ptr(), param.speed, &mut size)
+            }
+            AqVersion::V2 => {
+                let phont = param
+                    .phont_data
+                    .as_deref()
+                    .filter(|bytes| !bytes.is_empty())
+                    .map_or(std::ptr::null(), |bytes| bytes.as_ptr());
+                aq2_synthe_utf8(ctext.as_ptr(), param.speed, &mut size, phont)
+            }
+            AqVersion::V10 => {
+                let voice = aq10_voice(param).ok_or(ERR_OPEN)?;
+                aq10_synthe_utf8_default(
+                    ctext.as_ptr(),
+                    voice.bas,
+                    voice.spd,
+                    voice.vol,
+                    voice.pit,
+                    voice.acc,
+                    voice.lmd,
+                    voice.fsc,
+                    &mut size,
+                )
+            }
+        }
+    };
+
+    if pointer.is_null() || size <= 0 {
+        return Err(ERR_OPEN);
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(pointer, size as usize) }.to_vec();
+    unsafe {
+        match param.version {
+            AqVersion::V1 => aq1_free_wave(pointer),
+            AqVersion::V2 => aq2_free_wave(pointer),
+            AqVersion::V10 => aq10_free_wave(pointer),
+        }
+    }
+    Ok(bytes)
 }
 
 /// Synthesize UTF-8 `text`. `param` points at [`ParamAbi`] in memory 0.
@@ -168,23 +196,14 @@ pub extern "C" fn aq_synthesize(
     out_ptr: u32,
     out_len: u32,
 ) -> i32 {
-    THREW.0.set(false);
     let Some(param) = read_param(param, phont_len) else {
         return ERR_VERSION;
     };
     let text = read_text(text, text_len);
-    let voices = linked_voices();
-    let Some(_) = find_voice(&voices, &param) else {
-        return ERR_OPEN;
-    };
-    let result = session().synthesize(&voices, &mut Io, &param, &text);
-    if THREW.0.replace(false) {
-        return ERR_OPEN;
-    }
-    match result {
+    match synthesize(&param, &text) {
         Ok(bytes) => {
-            let (ptr, len) = store_wav(bytes);
-            write_u32(out_ptr, ptr);
+            let (pointer, len) = store_wav(bytes);
+            write_u32(out_ptr, pointer);
             write_u32(out_len, len);
             0
         }
@@ -197,23 +216,19 @@ pub extern "C" fn aq_synthesize(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn aq_free(ptr: u32) {
-    if ptr == 0 {
+pub extern "C" fn aq_free(pointer: u32) {
+    if pointer == 0 {
         return;
     }
     let mut wavs = WAVS.0.take();
-    wavs.retain(|(stored, _)| *stored != ptr);
+    wavs.retain(|(stored, _)| *stored != pointer);
     WAVS.0.set(wavs);
 }
 
-/// Wall time in milliseconds since the Unix epoch. `verifyLicense` compares a
-/// ticket's `exp` with this clock. Synthesis also sets a license-valid clock.
+/// Kept for API parity with the previous host.  The static engines verify
+/// their own license state, so the host clock is unused.
 #[unsafe(no_mangle)]
-pub extern "C" fn aq_set_clock(ms: f64) {
-    session().embind.set_clock(ms);
-}
-
-static ERR_BUF: SyncCell<[u8; 256]> = SyncCell(Cell::new([0; 256]));
+pub extern "C" fn aq_set_clock(_ms: f64) {}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn aq_error_message(version: i32, code: i32) -> u32 {
@@ -230,19 +245,28 @@ pub extern "C" fn aq_error_message(version: i32, code: i32) -> u32 {
     ERR_BUF.0.as_ptr() as u32
 }
 
-/// 1 when `name` was registered for the voice selected by `version` and `preset`.
+/// 1 when the statically linked engine accepts `version`/`preset`.
 #[unsafe(no_mangle)]
 pub extern "C" fn aq_has_function(version: i32, preset: i32, name: u32, name_len: u32) -> i32 {
     let Some(version) = AqVersion::from_i32(version) else {
         return 0;
     };
-    let mut param = AqSynthParam::new(version);
-    param.preset = preset;
-    let voices = linked_voices();
-    let Some(voice) = find_voice(&voices, &param) else {
-        return 0;
+    let valid = match version {
+        AqVersion::V1 => (0..AQ1_VOICES.len() as i32).contains(&preset),
+        AqVersion::V2 => true,
+        AqVersion::V10 => (0..synth::AQ10_PRESET_COUNT).contains(&preset),
     };
-    ensure_init(voice);
-    let name = read_text(name, name_len);
-    i32::from(session().embind.registered(voice, &name))
+    if !valid {
+        return 0;
+    }
+    match read_text(name, name_len).as_str() {
+        "synthe" | "verifyLicense" | "issueBalanceToken" => 1,
+        _ => 0,
+    }
+}
+
+/// Marker: number of engines linked into this module (1/2/10/k2k/k2kusrdic).
+#[unsafe(no_mangle)]
+pub extern "C" fn aq_static_engines() -> u32 {
+    5
 }

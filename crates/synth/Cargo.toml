@@ -4,5 +4,3 @@ edition.workspace = true
 version.workspace = true
 
 [dependencies]
-base64 = "0.23.1"
-embind = { path = "../embind" }

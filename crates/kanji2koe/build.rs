@@ -1,39 +1,46 @@
-use std::collections::HashMap;
-use std::path::Path;
+use std::path::PathBuf;
 
 fn main() {
     let target = std::env::var("TARGET").unwrap_or_default();
     if target.starts_with("wasm32") {
         println!("cargo:rustc-link-arg=--export-memory");
+        link_static_engine();
     }
-
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let env_path = root.join(".env");
-    println!("cargo:rerun-if-changed={}", env_path.display());
-    let map = load_dotenv(&env_path);
-    let jwt = required(&map, "LICENSE_JWT_B64");
-    println!("cargo:rustc-env=LICENSE_JWT_B64={jwt}");
 }
 
-fn required<'a>(map: &'a HashMap<String, String>, key: &str) -> &'a str {
-    map.get(key)
-        .map(String::as_str)
-        .unwrap_or_else(|| panic!("{key} missing from .env"))
-}
+/// Link `libaqk2k.a` (AqKanji2Koe) and the host helpers.
+fn link_static_engine() {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let dir = std::env::var_os("AQTK_RELOC_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("../../../aquestalk-wasm/dist/reloc"));
 
-fn load_dotenv(path: &Path) -> HashMap<String, String> {
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
-    let mut map = HashMap::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        map.insert(key.trim().to_string(), value.trim().to_string());
+    println!("cargo:rerun-if-env-changed=AQTK_RELOC_DIR");
+
+    let engine = dir.join("libaqk2k.a");
+    if !engine.exists() {
+        panic!(
+            "kanji2koe: {} is missing.\n\
+             Run `./scripts/build-reloc.sh` in the aquestalk-wasm checkout, or set \
+             AQTK_RELOC_DIR to the directory that contains the .a files.",
+            engine.display()
+        );
     }
-    map
+    let host = dir.join("libaqhost.a");
+    if !host.exists() {
+        panic!(
+            "kanji2koe: {} is missing (rebuild the link kit)",
+            host.display()
+        );
+    }
+    for path in [&engine, &host] {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+
+    println!("cargo:rustc-link-arg=--whole-archive");
+    println!("cargo:rustc-link-arg={}", engine.display());
+    println!("cargo:rustc-link-arg=--no-whole-archive");
+    println!("cargo:rustc-link-arg={}", host.display());
+    println!("cargo:rustc-link-arg=-zstack-size=8388608");
+    println!("cargo:rustc-link-arg=--max-memory=1073741824");
 }
