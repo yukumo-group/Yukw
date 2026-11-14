@@ -27,7 +27,7 @@ wasm，把同样的引擎在链接期合并进一个 Rust 模块：
 | --- | --- | --- |
 | 运行环境 | Windows / macOS / Linux 原生 | 任意 wasm32 运行时、浏览器 |
 | 引擎来源 | 官方 SDK 动态库 | aquestalk-wasm 的可重定位归档 |
-| 模块形态 | `Aqsh` 动态库 + `Aqsh.h` | 单个 wasm：0 imports、1 memory |
+| 模块形态 | `Aqsh` 动态库 + `Aqsh.h` | `aq_wasm.wasm` + `aq_wasm.h`（0 imports、1 memory） |
 | 语音库加载 | 运行时按目录/`phont/` 查找 | 链接期静态合并 |
 | 许可证 | `AqShim_Init(.env)`、`DevKey`/`UserKey` | 评价版引擎；暂不提供 `AqShim_Init` |
 | Kanji2Koe | 无 | 独立的 `kanji2koe` 模块 |
@@ -123,7 +123,7 @@ cd aquestalk-wasm
 
 # 2. 构建 Yukw
 cd ../Yukw
-just wasm        # target/wasm32-unknown-unknown/release/aq_wasm.wasm
+just wasm        # target/.../release/ 下的 aq_wasm.wasm + aq_wasm.h
 just kanji2koe   # target/wasm32-unknown-unknown/release/kanji2koe.wasm
 ```
 
@@ -145,6 +145,11 @@ host 侧检查：`just check` 或 `cargo check --workspace`。
 
 ## ABI
 
+完整 ABI 见
+[`crates/aq-wasm/include/aq_wasm.h`](crates/aq-wasm/include/aq_wasm.h)。
+`just wasm` 会把它复制到
+`target/wasm32-unknown-unknown/release/aq_wasm.h`，与 `.wasm` 同目录。
+
 ### `aq-wasm`
 
 ```c
@@ -153,7 +158,7 @@ int aq_synthesize(uint32_t text, uint32_t text_len, uint32_t param,
 void aq_free(uint32_t ptr);
 ```
 
-`param` 是 40 字节、10 个 `i32`：
+`param` 是 40 字节、10 个 `i32`（`aq_wasm.h` 里的 `AqSynthParam`）：
 
 ```
 version, preset, speed, phont_data, base, volume, pitch, accent, lmd, fsc
@@ -167,7 +172,8 @@ version, preset, speed, phont_data, base, volume, pitch, accent, lmd, fsc
 - 成功返回 0，并写出 WAV 指针/长度；失败返回负数，WAV 由 `aq_free` 释放
 
 模块还导出 `malloc/free`、`aq_has_function`、`aq_error_message`、
-`aq_static_engines`（返回链接的引擎数 5），以及五个引擎的直通 API。
+`aq_static_engines`（返回链接的引擎数 5），以及五个引擎的直通 API（见
+`aq_wasm.h`）。
 
 ### `kanji2koe`
 
@@ -189,6 +195,7 @@ void aqk_free(uint32_t ptr);
 # 构建并复制模块
 just wasm
 cp target/wasm32-unknown-unknown/release/aq_wasm.wasm examples/yukw.wasm
+cp target/wasm32-unknown-unknown/release/aq_wasm.h examples/
 
 # Python + wasmtime：每个 aq1 预设、aq2 phont、aq10 基本素片各生成一个 WAV
 cd examples

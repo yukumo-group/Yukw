@@ -9,6 +9,14 @@
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/aq-wasm/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/engine/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/character/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/embind/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/kanji2koe/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/kanji2koe/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/koe/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/script/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/synth/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/synth/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

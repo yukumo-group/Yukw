@@ -102,29 +102,18 @@ impl Session {
         }
     }
 
-    fn speak(
-        &mut self,
-        version: i32,
-        preset: i32,
-        speed: i32,
-        base: i32,
-        volume: i32,
-        pitch: i32,
-        accent: i32,
-        lmd: i32,
-        fsc: i32,
-        phont: &[u8],
-    ) -> Result<Vec<u8>, i32> {
-        let mut param = [0u8; 40];
-        param[0..4].copy_from_slice(&version.to_le_bytes());
-        param[4..8].copy_from_slice(&preset.to_le_bytes());
-        param[8..12].copy_from_slice(&speed.to_le_bytes());
-        param[16..20].copy_from_slice(&base.to_le_bytes());
-        param[20..24].copy_from_slice(&volume.to_le_bytes());
-        param[24..28].copy_from_slice(&pitch.to_le_bytes());
-        param[28..32].copy_from_slice(&accent.to_le_bytes());
-        param[32..36].copy_from_slice(&lmd.to_le_bytes());
-        param[36..40].copy_from_slice(&fsc.to_le_bytes());
+    fn speak(&mut self, param: &synth::AqSynthParam) -> Result<Vec<u8>, i32> {
+        let mut abi = [0u8; 40];
+        abi[0..4].copy_from_slice(&(param.version as i32).to_le_bytes());
+        abi[4..8].copy_from_slice(&param.preset.to_le_bytes());
+        abi[8..12].copy_from_slice(&param.speed.to_le_bytes());
+        abi[16..20].copy_from_slice(&param.base.to_le_bytes());
+        abi[20..24].copy_from_slice(&param.volume.to_le_bytes());
+        abi[24..28].copy_from_slice(&param.pitch.to_le_bytes());
+        abi[28..32].copy_from_slice(&param.accent.to_le_bytes());
+        abi[32..36].copy_from_slice(&param.lmd.to_le_bytes());
+        abi[36..40].copy_from_slice(&param.fsc.to_le_bytes());
+        let phont = param.phont_data.as_deref().unwrap_or(&[]);
         let phont_at = 100_000u32;
         let phont_len = if phont.is_empty() {
             0
@@ -132,12 +121,12 @@ impl Session {
             self.memory
                 .write(&mut self.store, phont_at as usize, phont)
                 .expect("write phont");
-            param[12..16].copy_from_slice(&phont_at.to_le_bytes());
+            abi[12..16].copy_from_slice(&phont_at.to_le_bytes());
             phont.len() as u32
         };
         let param_at = 66_000u32;
         self.memory
-            .write(&mut self.store, param_at as usize, &param)
+            .write(&mut self.store, param_at as usize, &abi)
             .expect("write param");
         let out_ptr = 90_000u32;
         let out_len = 90_004u32;
@@ -177,7 +166,27 @@ impl Session {
 
     /// Preset voice at speed 100, with the numeric fields left at zero.
     fn preset(&mut self, version: i32, preset: i32) -> Result<Vec<u8>, i32> {
-        self.speak(version, preset, 100, 0, 0, 0, 0, 0, 0, &[])
+        let mut param =
+            synth::AqSynthParam::new(synth::AqVersion::from_i32(version).expect("version"));
+        param.preset = preset;
+        param.speed = 100;
+        self.speak(&param)
+    }
+}
+
+/// AquesTalk10 custom voice: every knob at 100, `base` selects F1E, F2E, or M1E.
+fn aq10_custom(base: i32) -> synth::AqSynthParam {
+    synth::AqSynthParam {
+        version: synth::AqVersion::V10,
+        preset: synth::Aq10Preset::Custom as i32,
+        speed: 100,
+        phont_data: None,
+        base,
+        volume: 100,
+        pitch: 100,
+        accent: 100,
+        lmd: 100,
+        fsc: 100,
     }
 }
 
@@ -300,8 +309,12 @@ fn aq2_file_phont_matches_builtin_aq_rm() {
     let mut session = Session::new(built);
     let builtin = session.preset(2, preset).expect("builtin aq_rm");
     let file = std::fs::read(&phont_path).unwrap();
+    let mut param = synth::AqSynthParam::new(synth::AqVersion::V2);
+    param.preset = synth::AQ2_PRESET_COUNT;
+    param.speed = 100;
+    param.phont_data = Some(file);
     let custom = session
-        .speak(2, synth::AQ2_PRESET_COUNT, 100, 0, 0, 0, 0, 0, 0, &file)
+        .speak(&param)
         .expect("custom phont data overrides an unknown preset");
     assert_eq!(
         custom, builtin,
@@ -319,18 +332,7 @@ fn aq10_bases_produce_distinct_wavs() {
     let mut wavs = Vec::new();
     for (base, name) in [(0, "f1e"), (1, "f2e"), (2, "m1e")] {
         let wav = session
-            .speak(
-                10,
-                synth::Aq10Preset::Custom as i32,
-                100,
-                base,
-                100,
-                100,
-                100,
-                100,
-                100,
-                &[],
-            )
+            .speak(&aq10_custom(base))
             .unwrap_or_else(|code| panic!("aq10 {name}: {code}"));
         assert_riff(&format!("aq10 {name}"), &wav);
         wavs.push((name, wav));
@@ -365,20 +367,7 @@ fn aq10_fsc_100_is_16_khz() {
         return;
     };
     let mut session = Session::new(built);
-    let wav = session
-        .speak(
-            10,
-            synth::Aq10Preset::Custom as i32,
-            100,
-            0,
-            100,
-            100,
-            100,
-            100,
-            100,
-            &[],
-        )
-        .expect("aq10 f1e");
+    let wav = session.speak(&aq10_custom(0)).expect("aq10 f1e");
     assert_eq!(sample_rate(&wav), 16_000, "aq10 fsc 100 is 16 kHz");
 }
 
@@ -389,20 +378,7 @@ fn aq10_speed_100_matches_aq1_duration() {
     };
     let mut session = Session::new(built);
     let aq1 = session.preset(1, 0).expect("aq1 f1");
-    let aq10 = session
-        .speak(
-            10,
-            synth::Aq10Preset::Custom as i32,
-            100,
-            0,
-            100,
-            100,
-            100,
-            100,
-            100,
-            &[],
-        )
-        .expect("aq10 f1e");
+    let aq10 = session.speak(&aq10_custom(0)).expect("aq10 f1e");
     let aq1_secs = playback_secs(&aq1);
     let aq10_secs = playback_secs(&aq10);
     let ratio = aq10_secs / aq1_secs;

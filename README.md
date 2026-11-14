@@ -32,7 +32,7 @@ link time:
 | --- | --- | --- |
 | Runtime | native Windows / macOS / Linux | any wasm32 runtime, browsers |
 | Engine source | official SDK dynamic libraries | relocatable archives from aquestalk-wasm |
-| Shape | `Aqsh` shared library + `Aqsh.h` | one wasm: 0 imports, 1 memory |
+| Shape | `Aqsh` shared library + `Aqsh.h` | `aq_wasm.wasm` + `aq_wasm.h` (0 imports, 1 memory) |
 | Voice loading | runtime directory / `phont/` lookup | static merge at link time |
 | Licensing | `AqShim_Init(.env)`, `DevKey`/`UserKey` | evaluation engines; `AqShim_Init` not provided yet |
 | Kanji2Koe | none | separate `kanji2koe` module |
@@ -134,7 +134,7 @@ cd aquestalk-wasm
 
 # 2. Build Yukw
 cd ../Yukw
-just wasm        # target/wasm32-unknown-unknown/release/aq_wasm.wasm
+just wasm        # aq_wasm.wasm + aq_wasm.h in target/.../release/
 just kanji2koe   # target/wasm32-unknown-unknown/release/kanji2koe.wasm
 ```
 
@@ -156,6 +156,11 @@ Host-side check: `just check` or `cargo check --workspace`.
 
 ## ABI
 
+The wasm ABI is documented in
+[`crates/aq-wasm/include/aq_wasm.h`](crates/aq-wasm/include/aq_wasm.h).
+`just wasm` copies that header next to
+`target/wasm32-unknown-unknown/release/aq_wasm.wasm` as `aq_wasm.h`.
+
 ### `aq-wasm`
 
 ```c
@@ -164,7 +169,7 @@ int aq_synthesize(uint32_t text, uint32_t text_len, uint32_t param,
 void aq_free(uint32_t ptr);
 ```
 
-`param` is 40 bytes: 10 `i32` fields:
+`param` is 40 bytes: 10 `i32` fields (`AqSynthParam` in `aq_wasm.h`):
 
 ```
 version, preset, speed, phont_data, base, volume, pitch, accent, lmd, fsc
@@ -181,7 +186,7 @@ version, preset, speed, phont_data, base, volume, pitch, accent, lmd, fsc
 
 The module also exports `malloc/free`, `aq_has_function`, `aq_error_message`,
 `aq_static_engines` (the number of linked engines, 5), and the direct APIs of
-all five engines.
+all five engines (see `aq_wasm.h`).
 
 ### `kanji2koe`
 
@@ -203,6 +208,7 @@ are exported as well; the host uses them for dictionary and input buffers.
 # Build and copy the module
 just wasm
 cp target/wasm32-unknown-unknown/release/aq_wasm.wasm examples/yukw.wasm
+cp target/wasm32-unknown-unknown/release/aq_wasm.h examples/
 
 # Python + wasmtime: one WAV per aq1 preset, aq2 phont, and aq10 base
 cd examples

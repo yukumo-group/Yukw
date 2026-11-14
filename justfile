@@ -2,8 +2,10 @@
 # AqKanji2Koe/AqUsrDic engine entry points. No embind, no multi-memory.
 # Build the relocatable archives first in ../aquestalk-wasm:
 #   ./scripts/build-reloc.sh
+# Ships crates/aq-wasm/include/aq_wasm.h next to the .wasm.
 wasm:
     cargo build -p aq-wasm --target wasm32-unknown-unknown --release --lib
+    cp crates/aq-wasm/include/aq_wasm.h target/wasm32-unknown-unknown/release/aq_wasm.h
 
 # Build the Kanji2Koe reading module. The host loads lookup.bin, aqdic.bin and
 # aq_user.dic and calls aqk_load before aqk_convert.
