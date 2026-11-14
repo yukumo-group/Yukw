@@ -127,6 +127,11 @@ uint32_t aq_error_message(int32_t version, int32_t code);
 /* 1 when the linked engine accepts version/preset for version. */
 int32_t aq_has_preset(int32_t version, int32_t preset);
 
+/* Pointer to a table of NUL-terminated display-name pointers for `version`.
+ * Index 0 is the first preset (Aq1Preset / Aq2Preset / Aq10Preset).
+ * Writes the table length to *out_count. Returns 0 when version is unknown. */
+uint32_t aq_preset_names(int32_t version, uint32_t out_count);
+
 /* Number of engines linked into this module (currently 5). */
 uint32_t aq_static_engines(void);
 

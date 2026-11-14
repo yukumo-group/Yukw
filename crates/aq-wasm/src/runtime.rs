@@ -13,7 +13,7 @@ use std::cell::Cell;
 
 use synth::{
     AQ1_VOICES, AQ2_PRESET_COUNT, AqSynthParam, AqVersion, ERR_ARG, ERR_OPEN, ERR_VERSION,
-    aq10_voice, error_message,
+    aq10_voice, error_message, preset_display_names,
 };
 
 /// 40 bytes. AquesTalk2 uses `preset` or `phont_data`; there is no phont path.
@@ -250,9 +250,47 @@ pub extern "C" fn aq_has_preset(version: i32, preset: i32) -> i32 {
         AqVersion::V2 => (0..AQ2_PRESET_COUNT).contains(&preset),
         AqVersion::V10 => (0..synth::AQ10_PRESET_COUNT).contains(&preset),
     };
-    if !valid {
+    if valid { 1 } else { 0 }
+}
+
+static PRESET_NAME_PACK: SyncCell<Vec<u8>> = SyncCell(Cell::new(Vec::new()));
+
+/// Pointer to a table of NUL-terminated preset display-name pointers for
+/// `version`. Index 0 is the first preset. Writes the table length to
+/// `*out_count`. Returns 0 when `version` is unknown.
+///
+/// Layout: `count` little-endian `u32` pointers, then the string bytes they
+/// reference. The buffer is invalidated by the next call.
+#[unsafe(no_mangle)]
+pub extern "C" fn aq_preset_names(version: i32, out_count: u32) -> u32 {
+    let Some(version) = AqVersion::from_i32(version) else {
+        write_u32(out_count, 0);
         return 0;
+    };
+    let names = preset_display_names(version);
+    write_u32(out_count, names.len() as u32);
+
+    let mut string_bytes = Vec::new();
+    let mut offsets = Vec::with_capacity(names.len());
+    for name in names {
+        offsets.push(string_bytes.len());
+        string_bytes.extend_from_slice(name.as_bytes());
+        string_bytes.push(0);
     }
+
+    let n = names.len();
+    let mut packed = vec![0u8; n * 4 + string_bytes.len()];
+    let base = packed.as_mut_ptr() as u32;
+    let strings_at = base + (n as u32) * 4;
+    for (i, offset) in offsets.iter().enumerate() {
+        let pointer = strings_at + *offset as u32;
+        packed[i * 4..i * 4 + 4].copy_from_slice(&pointer.to_le_bytes());
+    }
+    packed[n * 4..].copy_from_slice(&string_bytes);
+
+    let pointer = packed.as_mut_ptr() as u32;
+    PRESET_NAME_PACK.0.set(packed);
+    pointer
 }
 
 /// Marker: number of engines linked into this module (1/2/10/k2k/k2kusrdic).

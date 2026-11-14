@@ -10,7 +10,8 @@ pub use param::{
     AqSynthParam, AqVersion,
 };
 pub use preset::{
-    AQ1_VOICES, AQ2_PHONTS, AQ10_VOICES, Aq10Voice, aq1_voice_name, aq2_phont_name, aq10_voice,
+    AQ1_VOICES, AQ2_DISPLAY_NAMES, AQ2_PHONTS, AQ10_DISPLAY_NAMES, AQ10_VOICES, Aq10Voice,
+    aq1_voice_name, aq2_phont_name, aq10_voice, preset_display_name, preset_display_names,
 };
 
 /// Empty input or an unusable parameter block.

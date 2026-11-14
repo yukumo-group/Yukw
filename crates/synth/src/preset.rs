@@ -29,6 +29,31 @@ pub const AQ2_PHONTS: [&str; AQ2_PRESET_COUNT as usize] = [
     "aq_momo1.phont",
 ];
 
+/// AquesTalk2 display names (phont stem without `.phont`), same order as `Aq2Preset`.
+pub const AQ2_DISPLAY_NAMES: [&str; AQ2_PRESET_COUNT as usize] = [
+    "aq_yukkuri",
+    "aq_defo1",
+    "aq_f1c",
+    "aq_f3a",
+    "aq_huskey",
+    "aq_m4b",
+    "aq_mf1",
+    "aq_rb2",
+    "aq_rb3",
+    "aq_rm",
+    "aq_robo",
+    "aq_teto1",
+    "ar_f4",
+    "ar_m5",
+    "ar_mf2",
+    "ar_rm3",
+    "aq_momo1",
+];
+
+/// AquesTalk10 display names, same order as `Aq10Preset` (index 0 is custom).
+pub const AQ10_DISPLAY_NAMES: [&str; AQ10_PRESET_COUNT as usize] =
+    ["custom", "f1", "f2", "f3", "m1", "m2", "r1", "r2"];
+
 /// One AquesTalk10 voice row: bas, spd, vol, pit, acc, lmd, fsc.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Aq10Voice {
@@ -133,4 +158,17 @@ pub fn aq1_voice_name(preset: i32) -> Option<&'static str> {
 
 pub fn aq2_phont_name(preset: i32) -> Option<&'static str> {
     AQ2_PHONTS.get(preset as usize).copied()
+}
+
+/// Display names for every preset of `version`. Index 0 is the first preset.
+pub fn preset_display_names(version: crate::AqVersion) -> &'static [&'static str] {
+    match version {
+        crate::AqVersion::V1 => &AQ1_VOICES,
+        crate::AqVersion::V2 => &AQ2_DISPLAY_NAMES,
+        crate::AqVersion::V10 => &AQ10_DISPLAY_NAMES,
+    }
+}
+
+pub fn preset_display_name(version: crate::AqVersion, preset: i32) -> Option<&'static str> {
+    preset_display_names(version).get(preset as usize).copied()
 }
