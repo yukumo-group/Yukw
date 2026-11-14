@@ -1,6 +1,0 @@
-[package]
-name = "character"
-edition.workspace = true
-version.workspace = true
-
-[dependencies]
