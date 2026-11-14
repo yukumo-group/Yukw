@@ -241,7 +241,7 @@ pub extern "C" fn aq_error_message(version: i32, code: i32) -> u32 {
 
 /// 1 when the statically linked engine accepts `version`/`preset`.
 #[unsafe(no_mangle)]
-pub extern "C" fn aq_has_function(version: i32, preset: i32, name: u32, name_len: u32) -> i32 {
+pub extern "C" fn aq_has_preset(version: i32, preset: i32) -> i32 {
     let Some(version) = AqVersion::from_i32(version) else {
         return 0;
     };
@@ -252,10 +252,6 @@ pub extern "C" fn aq_has_function(version: i32, preset: i32, name: u32, name_len
     };
     if !valid {
         return 0;
-    }
-    match read_text(name, name_len).as_str() {
-        "synthe" | "verifyLicense" | "issueBalanceToken" => 1,
-        _ => 0,
     }
 }
 

@@ -124,10 +124,8 @@ void aq_set_clock(double ms);
 /* NUL-terminated AQ1_/AQ2_/AQ10_ error token in module memory, or 0. */
 uint32_t aq_error_message(int32_t version, int32_t code);
 
-/* 1 when the linked engine accepts version/preset for name
- * ("synthe", "verifyLicense", "issueBalanceToken"). */
-int32_t aq_has_function(int32_t version, int32_t preset, uint32_t name,
-                        uint32_t name_len);
+/* 1 when the linked engine accepts version/preset for version. */
+int32_t aq_has_preset(int32_t version, int32_t preset);
 
 /* Number of engines linked into this module (currently 5). */
 uint32_t aq_static_engines(void);
