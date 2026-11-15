@@ -1,4 +1,21 @@
-use synth::{AqVersion, error_message};
+//! Shared and engine-specific error message shims.
+
+use synth::{
+    AqVersion, ERR_ARG, ERR_OPEN, ERR_VERSION, error_message, host_error_message,
+};
+
+#[test]
+fn host_codes_always_have_tokens() {
+    assert_eq!(host_error_message(ERR_ARG), Some("AQ_ERR_ARG"));
+    assert_eq!(host_error_message(ERR_VERSION), Some("AQ_ERR_VERSION"));
+    assert_eq!(host_error_message(ERR_OPEN), Some("AQ_ERR_OPEN"));
+    assert_eq!(error_message(AqVersion::V1, ERR_ARG), Some("AQ_ERR_ARG"));
+    assert_eq!(error_message(AqVersion::V10, ERR_OPEN), Some("AQ_ERR_OPEN"));
+    // Must not treat host codes as abs(engine) lookups.
+    assert_eq!(error_message(AqVersion::V1, 1), None);
+    assert_eq!(error_message(AqVersion::V1, 2), None);
+    assert_eq!(error_message(AqVersion::V1, 3), None);
+}
 
 #[test]
 fn shared_and_engine_codes_use_the_shim_names() {

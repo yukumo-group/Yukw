@@ -81,13 +81,6 @@ typedef enum Aq10Preset {
     AQ10_PRESET_COUNT
 } Aq10Preset;
 
-/* Host-side error codes returned by aq_synthesize before an engine runs. */
-enum {
-    AQ_ERR_ARG = -1,
-    AQ_ERR_VERSION = -2,
-    AQ_ERR_OPEN = -3
-};
-
 /* ------------------------------------------------------------------ */
 /* High-level synthesis (preferred host surface)                      */
 /* ------------------------------------------------------------------ */
@@ -111,8 +104,9 @@ typedef struct AqSynthParam {
 /* Synthesize UTF-8 text[text_len] with the param at `param`.
  * phont_len is the byte length of phont_data when that pointer is set.
  * On success returns 0 and stores the WAV offset at *out_ptr and its length
- * at *out_len.  On failure returns a negative code and clears both outs.
- * Release a successful WAV with aq_free. */
+ * at *out_len.  On failure clears both outs and returns a host code
+ * (-1/-2/-3) or the engine error from the synthe size out-param; resolve
+ * either with aq_error_message.  Release a successful WAV with aq_free. */
 int32_t aq_synthesize(uint32_t text, uint32_t text_len, uint32_t param,
                       uint32_t phont_len, uint32_t out_ptr, uint32_t out_len);
 
@@ -121,7 +115,9 @@ void aq_free(uint32_t pointer);
 /* No-op retained for API parity with the previous embind host. */
 void aq_set_clock(double ms);
 
-/* NUL-terminated AQ1_/AQ2_/AQ10_ error token in module memory, or 0. */
+/* NUL-terminated error token in module memory, or 0.
+ * Host codes -1/-2/-3 always yield AQ_ERR_ARG / AQ_ERR_VERSION / AQ_ERR_OPEN
+ * (version is ignored).  Engine codes yield AQ1_/AQ2_/AQ10_ tokens. */
 uint32_t aq_error_message(int32_t version, int32_t code);
 
 /* 1 when the linked engine accepts version/preset for version. */

@@ -13,7 +13,7 @@ use std::cell::Cell;
 
 use synth::{
     AQ1_VOICES, AQ2_PRESET_COUNT, AqSynthParam, AqVersion, ERR_ARG, ERR_OPEN, ERR_VERSION,
-    aq10_voice, error_message, preset_display_names,
+    aq10_voice, error_message, host_error_message, preset_display_names,
 };
 
 /// 40 bytes. AquesTalk2 uses `preset` or `phont_data`; there is no phont path.
@@ -163,8 +163,10 @@ fn synthesize(param: &AqSynthParam, text: &str) -> Result<Vec<u8>, i32> {
         }
     };
 
+    // Engines return null and write the failure code into `size`.
+    // Host-only failures keep ERR_OPEN when size was left at 0.
     if pointer.is_null() || size <= 0 {
-        return Err(ERR_OPEN);
+        return Err(if size != 0 { size } else { ERR_OPEN });
     }
     let bytes = unsafe { std::slice::from_raw_parts(pointer, size as usize) }.to_vec();
     unsafe {
@@ -180,7 +182,9 @@ fn synthesize(param: &AqSynthParam, text: &str) -> Result<Vec<u8>, i32> {
 /// Synthesize UTF-8 `text`. `param` points at [`ParamAbi`] in memory 0.
 /// `phont_len` is the size of `phont_data` when that pointer is set.
 /// An empty `phont_data` selects the inlined AquesTalk2 phont for `preset`.
-/// On success returns 0 and writes the wav pointer and size. Otherwise, a negative code.
+/// On success returns 0 and writes the wav pointer and size. On failure returns
+/// a host code ([`ERR_ARG`] / [`ERR_VERSION`] / [`ERR_OPEN`]) or the engine's
+/// own code from `size` (see [`error_message`]).
 #[unsafe(no_mangle)]
 pub extern "C" fn aq_synthesize(
     text: u32,
@@ -226,11 +230,17 @@ pub extern "C" fn aq_set_clock(_ms: f64) {}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn aq_error_message(version: i32, code: i32) -> u32 {
-    let Some(version) = AqVersion::from_i32(version) else {
-        return 0;
-    };
-    let Some(text) = error_message(version, code) else {
-        return 0;
+    // Host codes always resolve; version is only needed for engine tokens.
+    let text = if let Some(text) = host_error_message(code) {
+        text
+    } else {
+        let Some(version) = AqVersion::from_i32(version) else {
+            return 0;
+        };
+        let Some(text) = error_message(version, code) else {
+            return 0;
+        };
+        text
     };
     let mut bytes = [0; 256];
     let take = text.len().min(bytes.len() - 1);

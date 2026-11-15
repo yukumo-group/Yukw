@@ -4,7 +4,7 @@ mod error;
 mod param;
 mod preset;
 
-pub use error::error_message;
+pub use error::{error_message, host_error_message};
 pub use param::{
     AQ1_PRESET_COUNT, AQ2_PRESET_COUNT, AQ10_PRESET_COUNT, Aq1Preset, Aq2Preset, Aq10Preset,
     AqSynthParam, AqVersion,

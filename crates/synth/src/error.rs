@@ -1,8 +1,22 @@
 //! Engine error names from `aqtk-shim/src/aq_error.cpp`.
 //! A negative code is the same failure as its positive form.
 //! Unknown codes return `None`.
+//!
+//! Host codes [`crate::ERR_ARG`] / [`crate::ERR_VERSION`] / [`crate::ERR_OPEN`]
+//! are version-agnostic tokens (`AQ_ERR_*`).
 
 use crate::param::AqVersion;
+use crate::{ERR_ARG, ERR_OPEN, ERR_VERSION};
+
+/// `AQ_ERR_ARG` / `AQ_ERR_VERSION` / `AQ_ERR_OPEN` for host codes; else `None`.
+pub fn host_error_message(code: i32) -> Option<&'static str> {
+    match code {
+        ERR_ARG => Some("AQ_ERR_ARG"),
+        ERR_VERSION => Some("AQ_ERR_VERSION"),
+        ERR_OPEN => Some("AQ_ERR_OPEN"),
+        _ => None,
+    }
+}
 
 struct ErrorRow {
     /// 0 applies to every engine. Otherwise, an [`AqVersion`] discriminant.
@@ -189,8 +203,12 @@ fn join(version: AqVersion, name: &'static str) -> &'static str {
     }
 }
 
-/// `AQ1_<NAME>`, `AQ2_<NAME>`, or `AQ10_<NAME>`.
+/// `AQ_ERR_*` for host codes; otherwise `AQ1_<NAME>`, `AQ2_<NAME>`, or
+/// `AQ10_<NAME>`.
 pub fn error_message(version: AqVersion, code: i32) -> Option<&'static str> {
+    if let Some(text) = host_error_message(code) {
+        return Some(text);
+    }
     let code = if code < 0 { -code } else { code };
     let name = error_name(version, code)?;
     let text = join(version, name);
