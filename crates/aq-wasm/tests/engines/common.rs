@@ -1,4 +1,4 @@
-//! Build `aq-wasm` with the relocatable AquesTalk archives and synthesize.
+//! Shared harness for aq-wasm static-engine integration tests.
 //!
 //! Skipped unless the archives from `aquestalk-wasm/scripts/build-reloc.sh`
 //! are available (set `AQTK_RELOC_DIR` or keep the two checkouts side by side).
@@ -8,20 +8,20 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-fn reloc_dir(workspace: &Path) -> Option<PathBuf> {
+pub fn reloc_dir(workspace: &Path) -> Option<PathBuf> {
     let dir = std::env::var_os("AQTK_RELOC_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.join("../aquestalk-wasm/dist/reloc"));
     dir.join("libaq1.a").exists().then_some(dir)
 }
 
-struct Built {
-    engine: wasmtime::Engine,
-    module: wasmtime::Module,
-    workspace: PathBuf,
+pub struct Built {
+    pub engine: wasmtime::Engine,
+    pub module: wasmtime::Module,
+    pub workspace: PathBuf,
 }
 
-fn built() -> Option<&'static Built> {
+pub fn built() -> Option<&'static Built> {
     static BUILT: OnceLock<Option<Built>> = OnceLock::new();
     BUILT
         .get_or_init(|| {
@@ -63,7 +63,7 @@ fn built() -> Option<&'static Built> {
         .as_ref()
 }
 
-struct Session {
+pub struct Session {
     store: wasmtime::Store<()>,
     memory: wasmtime::Memory,
     synthesize: wasmtime::TypedFunc<(u32, u32, u32, u32, u32, u32), i32>,
@@ -73,7 +73,7 @@ struct Session {
 }
 
 impl Session {
-    fn new(built: &Built) -> Self {
+    pub fn new(built: &Built) -> Self {
         let mut store = wasmtime::Store::new(&built.engine, ());
         let instance =
             wasmtime::Instance::new(&mut store, &built.module, &[]).expect("instantiate aq-wasm");
@@ -102,7 +102,7 @@ impl Session {
         }
     }
 
-    fn speak(&mut self, param: &synth::AqSynthParam) -> Result<Vec<u8>, i32> {
+    pub fn speak(&mut self, param: &synth::AqSynthParam) -> Result<Vec<u8>, i32> {
         let mut abi = [0u8; 40];
         abi[0..4].copy_from_slice(&(param.version as i32).to_le_bytes());
         abi[4..8].copy_from_slice(&param.preset.to_le_bytes());
@@ -165,7 +165,7 @@ impl Session {
     }
 
     /// Preset voice at speed 100, with the numeric fields left at zero.
-    fn preset(&mut self, version: i32, preset: i32) -> Result<Vec<u8>, i32> {
+    pub fn preset(&mut self, version: i32, preset: i32) -> Result<Vec<u8>, i32> {
         let mut param =
             synth::AqSynthParam::new(synth::AqVersion::from_i32(version).expect("version"));
         param.preset = preset;
@@ -175,7 +175,7 @@ impl Session {
 }
 
 /// AquesTalk10 custom voice: every knob at 100, `base` selects F1E, F2E, or M1E.
-fn aq10_custom(base: i32) -> synth::AqSynthParam {
+pub fn aq10_custom(base: i32) -> synth::AqSynthParam {
     synth::AqSynthParam {
         version: synth::AqVersion::V10,
         preset: synth::Aq10Preset::Custom as i32,
@@ -190,17 +190,17 @@ fn aq10_custom(base: i32) -> synth::AqSynthParam {
     }
 }
 
-fn sample_rate(wav: &[u8]) -> u32 {
+pub fn sample_rate(wav: &[u8]) -> u32 {
     u32::from_le_bytes(wav[24..28].try_into().unwrap())
 }
 
-fn playback_secs(wav: &[u8]) -> f64 {
+pub fn playback_secs(wav: &[u8]) -> f64 {
     let rate = sample_rate(wav);
     assert!(rate >= 8_000, "sample rate {rate}");
     (wav.len() - 44) as f64 / (f64::from(rate) * 2.0)
 }
 
-fn assert_distinct(wavs: &[(&str, Vec<u8>)]) {
+pub fn assert_distinct(wavs: &[(&str, Vec<u8>)]) {
     for (index, (name, wav)) in wavs.iter().enumerate() {
         for (other, other_wav) in wavs.iter().take(index) {
             assert_ne!(wav, other_wav, "{name} produced the same wav as {other}");
@@ -208,182 +208,6 @@ fn assert_distinct(wavs: &[(&str, Vec<u8>)]) {
     }
 }
 
-fn assert_riff(label: &str, wav: &[u8]) {
+pub fn assert_riff(label: &str, wav: &[u8]) {
     assert!(wav.starts_with(b"RIFF"), "{label}");
-}
-
-#[test]
-fn module_exports_one_memory_and_no_imports() {
-    let Some(built) = built() else {
-        return;
-    };
-    assert_eq!(
-        built.module.imports().count(),
-        0,
-        "module must not import anything"
-    );
-    let memories = built
-        .module
-        .exports()
-        .filter(|export| matches!(export.ty(), wasmtime::ExternType::Memory(_)))
-        .count();
-    assert_eq!(memories, 1, "module must export exactly one memory");
-}
-
-#[test]
-fn static_link_reports_five_engines() {
-    let Some(built) = built() else {
-        return;
-    };
-    let mut store = wasmtime::Store::new(&built.engine, ());
-    let instance =
-        wasmtime::Instance::new(&mut store, &built.module, &[]).expect("instantiate aq-wasm");
-    let engines = instance
-        .get_typed_func::<(), u32>(&mut store, "aq_static_engines")
-        .expect("aq_static_engines");
-    assert_eq!(engines.call(&mut store, ()).unwrap(), 5);
-}
-
-#[test]
-fn aq1_voices_produce_distinct_wavs() {
-    let Some(built) = built() else {
-        return;
-    };
-    let mut session = Session::new(built);
-    let mut wavs = Vec::new();
-    for (preset, name) in synth::AQ1_VOICES.iter().enumerate() {
-        let wav = session
-            .preset(1, preset as i32)
-            .unwrap_or_else(|code| panic!("aq1 {name}: {code}"));
-        assert_riff(&format!("aq1 {name}"), &wav);
-        wavs.push((*name, wav));
-    }
-    assert_distinct(&wavs);
-}
-
-#[test]
-fn aq2_presets_produce_distinct_wavs() {
-    let Some(built) = built() else {
-        return;
-    };
-    let mut session = Session::new(built);
-    let mut wavs = Vec::new();
-    for (preset, name) in synth::AQ2_PHONTS.iter().enumerate() {
-        let wav = session
-            .preset(2, preset as i32)
-            .unwrap_or_else(|code| panic!("aq2 {name}: {code}"));
-        assert_riff(&format!("aq2 {name}"), &wav);
-        wavs.push((*name, wav));
-    }
-    assert_distinct(&wavs);
-}
-
-#[test]
-fn aq2_unknown_preset_without_phont_fails() {
-    let Some(built) = built() else {
-        return;
-    };
-    let mut session = Session::new(built);
-    assert!(
-        session.preset(2, synth::AQ2_PRESET_COUNT).is_err(),
-        "an unknown aq2 preset without phont data must fail"
-    );
-}
-
-#[test]
-fn aq2_file_phont_matches_builtin_aq_rm() {
-    let Some(built) = built() else {
-        return;
-    };
-    let phont_path = built
-        .workspace
-        .join("../aquestalk-wasm/engines/aquestalk2/aqtk2-lnx/phont/aq_rm.phont");
-    if !phont_path.exists() {
-        eprintln!("skipping: aq_rm.phont is not in the aquestalk-wasm checkout");
-        return;
-    }
-    let preset = synth::AQ2_PHONTS
-        .iter()
-        .position(|name| *name == "aq_rm.phont")
-        .expect("aq_rm.phont is a builtin preset") as i32;
-    let mut session = Session::new(built);
-    let builtin = session.preset(2, preset).expect("builtin aq_rm");
-    let file = std::fs::read(&phont_path).unwrap();
-    let mut param = synth::AqSynthParam::new(synth::AqVersion::V2);
-    param.preset = synth::AQ2_PRESET_COUNT;
-    param.speed = 100;
-    param.phont_data = Some(file);
-    let custom = session
-        .speak(&param)
-        .expect("custom phont data overrides an unknown preset");
-    assert_eq!(
-        custom, builtin,
-        "aq_rm.phont must match the inlined AqRm preset"
-    );
-}
-
-#[test]
-fn aq10_bases_produce_distinct_wavs() {
-    let Some(built) = built() else {
-        return;
-    };
-    // AquesTalk10 bases are the three 基本素片: F1E, F2E, M1E.
-    let mut session = Session::new(built);
-    let mut wavs = Vec::new();
-    for (base, name) in [(0, "f1e"), (1, "f2e"), (2, "m1e")] {
-        let wav = session
-            .speak(&aq10_custom(base))
-            .unwrap_or_else(|code| panic!("aq10 {name}: {code}"));
-        assert_riff(&format!("aq10 {name}"), &wav);
-        wavs.push((name, wav));
-    }
-    assert_distinct(&wavs);
-}
-
-#[test]
-fn aq10_named_presets_produce_distinct_wavs() {
-    let Some(built) = built() else {
-        return;
-    };
-    let mut session = Session::new(built);
-    let mut wavs = Vec::new();
-    for (preset, name) in [
-        (synth::Aq10Preset::F1 as i32, "f1"),
-        (synth::Aq10Preset::F2 as i32, "f2"),
-        (synth::Aq10Preset::M1 as i32, "m1"),
-    ] {
-        let wav = session
-            .preset(10, preset)
-            .unwrap_or_else(|code| panic!("aq10 preset {name}: {code}"));
-        assert_riff(&format!("aq10 preset {name}"), &wav);
-        wavs.push((name, wav));
-    }
-    assert_distinct(&wavs);
-}
-
-#[test]
-fn aq10_fsc_100_is_16_khz() {
-    let Some(built) = built() else {
-        return;
-    };
-    let mut session = Session::new(built);
-    let wav = session.speak(&aq10_custom(0)).expect("aq10 f1e");
-    assert_eq!(sample_rate(&wav), 16_000, "aq10 fsc 100 is 16 kHz");
-}
-
-#[test]
-fn aq10_speed_100_matches_aq1_duration() {
-    let Some(built) = built() else {
-        return;
-    };
-    let mut session = Session::new(built);
-    let aq1 = session.preset(1, 0).expect("aq1 f1");
-    let aq10 = session.speak(&aq10_custom(0)).expect("aq10 f1e");
-    let aq1_secs = playback_secs(&aq1);
-    let aq10_secs = playback_secs(&aq10);
-    let ratio = aq10_secs / aq1_secs;
-    assert!(
-        (0.6..=1.5).contains(&ratio),
-        "aq10 {aq10_secs:.2}s vs aq1 {aq1_secs:.2}s (ratio {ratio:.2}); speed 100 is the 50-300 scale on both"
-    );
 }

@@ -1,3 +1,5 @@
+//! Script selection and Reader contract errors (no engine).
+
 use kanji2koe::{ERR_ARG, ERR_OPEN, LinkedScript, Reader, Script, Session, find_script};
 use koe::ToKoe;
 
