@@ -15,7 +15,9 @@ fn main() {
 /// after them and provides the string/stdio/trap helpers; the crate itself
 /// provides `malloc`/`free` from `src/host_alloc.rs`.
 fn link_static_engines() {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // Runtime (not env!): survives moving the checkout without rebuilding the
+    // build-script binary against a stale compile-time path.
+    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let dir = std::env::var_os("AQTK_RELOC_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| manifest.join("../../../aquestalk-wasm/dist/reloc"));

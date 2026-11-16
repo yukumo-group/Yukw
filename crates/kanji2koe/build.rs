@@ -10,7 +10,9 @@ fn main() {
 
 /// Link `libaqk2k.a` (AqKanji2Koe) and the host helpers.
 fn link_static_engine() {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // Runtime (not env!): survives moving the checkout without rebuilding the
+    // build-script binary against a stale compile-time path.
+    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let dir = std::env::var_os("AQTK_RELOC_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| manifest.join("../../../aquestalk-wasm/dist/reloc"));
